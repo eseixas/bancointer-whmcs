@@ -1,0 +1,25 @@
+# Certificados e chaves privadas
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# Dependências
+vendor/
+
+# Ambiente
+.env
+.env.*
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Arquivos de diagnóstico locais
+inter_diag.php
