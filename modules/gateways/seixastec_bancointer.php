@@ -103,6 +103,11 @@ function seixastec_bancointer_config(): array
             "Type" => "yesno",
             "Description" => "Emite a cobrança assim que a fatura é criada.",
         ],
+        "attach_pdf_always" => [
+            "FriendlyName" => "Anexar boleto em todas as faturas",
+            "Type" => "yesno",
+            "Description" => "Quando ativado, anexa o PDF do boleto a TODAS as faturas (não apenas as com método Banco Inter), gerando a cobrança automaticamente se necessário.",
+        ],
         "dias_baixa" => [
             "FriendlyName" => "Dias para Baixa Automática",
             "Type" => "text",
