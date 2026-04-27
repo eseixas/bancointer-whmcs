@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "whmcs-dev-skills": {
+      "source": "Waqasahmedwaseer/whmcs-dev-skills",
+      "sourceType": "github",
+      "computedHash": "87f8799e09e86101fff8fe4bf653da7d6b7825bdacceae6c51313201ddebfcbd"
+    }
+  }
+}

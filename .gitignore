@@ -1,0 +1,8 @@
+.agent/
+.claude/
+.vscode/
+.idea/
+vendor/
+node_modules/
+*.log
+.env
