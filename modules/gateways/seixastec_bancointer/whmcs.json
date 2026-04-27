@@ -3,24 +3,8 @@
     "type": "gateway",
     "name": "Banco Inter Boleto e PIX",
     "license": "proprietary",
-    "category": "payments",
-    "description": {
-        "name": "Banco Inter Boleto e PIX",
-        "tagline": "Para pagamentos via boleto bancário e PIX.",
-        "long": "",
-        "features": [
-            "Seu boleto sai direto no PDF anexo a fatura (funcionalidade exclusiva).",
-            "Boletos registrados conforme especificação da FEBRABAN. Baixa de pagamentos automática.",
-            "Emita boletos bancários direto do seu WHMCS."
-        ]
-    },
     "logo": {
         "filename": "inter.png"
-    },
-    "support": {
-        "homepage": "https://www.seixastecnologia.com.br/",
-        "support_url": "https://github.com/eseixas/bancointer-whmcs/issues/new",
-        "email": "contato@seixastecnologia.com.br"
     },
     "authors": [
         {
