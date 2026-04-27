@@ -1,15 +1,32 @@
 {
     "schema": "1.0",
-    "type": "gateway",
-    "name": "Banco Inter Boleto e PIX",
-    "license": "proprietary",
+    "type": "whmcs-gateways",
+    "name": "seixastec_bancointer",
+    "license": "MIT",
+    "category": "payments",
+    "description": {
+        "name": "Banco Inter Boleto e PIX",
+        "tagline": "Integração com Banco Inter",
+        "long": "O módulo Boleto Banco Inter permite gerar boletos e dar baixa de forma automatica diretamente do seu WHMCS.",
+        "features": [
+            "Gera boleto registrados de forma automática.",
+            "Possível adicionar taxa de juros e multa diretamente pelo gateway.",
+            "Retorno automática usando webhoook."
+        ]
+    },
     "logo": {
         "filename": "inter.png"
+    },
+    "support": {
+        "homepage": "https://www.seixastecnologia.com.br", 
+        "email": "contato@seixastecnologia.com.br", 
+        "learn_more": "https://github.com/eseixas/bancointer-whmcs", 
+        "support_url": "https://github.com/eseixas/bancointer-whmcs/issues"
     },
     "authors": [
         {
             "name": "Seixas Tecnologia",
-            "homepage": "https://www.seixastecnologia.com.br/"
+            "homepage": "https://www.seixastecnologia.com.br"
         }
     ]
 }
