@@ -1,6 +1,6 @@
 {
     "schema": "1.0",
-    "type": "whmcs-gateways",
+    "type": "gateway",
     "name": "Banco Inter Boleto e PIX",
     "license": "proprietary",
     "category": "payments",
@@ -15,7 +15,7 @@
         ]
     },
     "logo": {
-        "filename": "logo.png"
+        "filename": "inter.png"
     },
     "support": {
         "homepage": "https://www.seixastecnologia.com.br/",

@@ -10,7 +10,7 @@
 use WHMCS\Database\Capsule;
 
 require_once __DIR__ . "/../../../init.php";
-require_once __DIR__ . "/seixastec_bancointer.php";
+require_once __DIR__ . "/../seixastec_bancointer.php";
 
 if (empty($_SESSION["adminid"])) {
     http_response_code(403);
