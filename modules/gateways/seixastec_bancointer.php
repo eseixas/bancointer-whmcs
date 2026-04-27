@@ -15,8 +15,8 @@ if (!defined("WHMCS")) {
 
 use WHMCS\Database\Capsule;
 
-require_once __DIR__ . "/helper.php";
-require_once __DIR__ . "/BancoInterAPI.php";
+require_once __DIR__ . "/seixastec_bancointer/helper.php";
+require_once __DIR__ . "/seixastec_bancointer/BancoInterAPI.php";
 
 function seixastec_bancointer_MetaData(): array
 {

@@ -16,7 +16,7 @@ use WHMCS\Database\Capsule;
 require_once __DIR__ . "/../../../init.php";
 require_once __DIR__ . "/../../../includes/gatewayfunctions.php";
 require_once __DIR__ . "/../../../includes/invoicefunctions.php";
-require_once __DIR__ . "/../seixastec_bancointer/seixastec_bancointer.php";
+require_once __DIR__ . "/../seixastec_bancointer.php";
 
 $gatewayParams = getGatewayVariables("seixastec_bancointer");
 if (!$gatewayParams["type"]) {

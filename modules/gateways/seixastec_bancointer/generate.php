@@ -16,7 +16,7 @@
 use WHMCS\Database\Capsule;
 
 require_once __DIR__ . "/../../../init.php";
-require_once __DIR__ . "/seixastec_bancointer.php";
+require_once __DIR__ . "/../seixastec_bancointer.php";
 
 $action   = (string) ($_REQUEST["action"] ?? "generate");
 $invoiceId = (int) ($_REQUEST["invoiceid"] ?? 0);
