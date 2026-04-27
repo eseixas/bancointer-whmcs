@@ -14,7 +14,7 @@ if (!defined("WHMCS")) {
     die("This file cannot be accessed directly");
 }
 
-require_once __DIR__ . "/../../modules/gateways/seixastec_bancointer.php";
+require_once __DIR__ . "/../../modules/gateways/seixastec_bancointer/seixastec_bancointer.php";
 
 add_hook("InvoiceCreation", 1, function (array $vars) {
     $invoiceId = (int) ($vars["invoiceid"] ?? 0);
