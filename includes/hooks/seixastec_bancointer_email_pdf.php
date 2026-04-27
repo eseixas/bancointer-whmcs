@@ -22,6 +22,7 @@ add_hook("EmailPreSend", 1, function (array $vars) {
         "First Payment Reminder",
         "Second Payment Reminder",
         "Third Payment Reminder",
+        "Overdue Invoice Notification",
     ];
     if (!in_array($messageName, $allowed, true)) {
         return;
@@ -37,17 +38,37 @@ add_hook("EmailPreSend", 1, function (array $vars) {
         return;
     }
 
-    if (strtolower((string) $invoice->paymentmethod) !== "seixastec_bancointer") {
+    $params = seixastec_bancointer_loadParams();
+    if (!$params) {
+        return;
+    }
+
+    $isBancoInter = strtolower((string) $invoice->paymentmethod) === "seixastec_bancointer";
+    $attachAlways = !empty($params["attach_pdf_always"]) && $params["attach_pdf_always"] !== "off";
+    if (!$isBancoInter && !$attachAlways) {
         return;
     }
 
     $tx = BancoInterHelper::findByInvoice($relid);
-    if (!$tx || empty($tx->codigo_solicitacao)) {
-        return;
+
+    // Quando "anexar em todas" está on e ainda não há cobrança, gera on-the-fly.
+    if ((!$tx || empty($tx->codigo_solicitacao)) && $attachAlways && (float) $invoice->total > 0) {
+        try {
+            $row = seixastec_bancointer_generateForInvoice(
+                (int) $invoice->id,
+                (int) $invoice->userid,
+                (float) $invoice->total,
+                (string) $invoice->duedate,
+                $params
+            );
+            $tx = (object) $row;
+        } catch (Throwable $e) {
+            BancoInterHelper::log("hook.email_pdf.generate", ["invoiceid" => $relid], $e->getMessage());
+            return;
+        }
     }
 
-    $params = seixastec_bancointer_loadParams();
-    if (!$params) {
+    if (!$tx || empty($tx->codigo_solicitacao)) {
         return;
     }
 

@@ -27,12 +27,19 @@ add_hook("InvoiceCreation", 1, function (array $vars) {
         return;
     }
 
-    if (strtolower((string) $invoice->paymentmethod) !== "seixastec_bancointer") {
+    $params = seixastec_bancointer_loadParams();
+    if (!$params) {
         return;
     }
 
-    $params = seixastec_bancointer_loadParams();
-    if (!$params || empty($params["auto_generate"]) || $params["auto_generate"] === "off") {
+    $isBancoInter = strtolower((string) $invoice->paymentmethod) === "seixastec_bancointer";
+    $autoGenerate = !empty($params["auto_generate"]) && $params["auto_generate"] !== "off";
+    $attachAlways = !empty($params["attach_pdf_always"]) && $params["attach_pdf_always"] !== "off";
+
+    // Gera a cobrança quando:
+    //   - método é Banco Inter e auto_generate está on (semântica original); OU
+    //   - attach_pdf_always está on (precisa ter cobrança para anexar PDF nos e-mails).
+    if (!(($isBancoInter && $autoGenerate) || $attachAlways)) {
         return;
     }
 

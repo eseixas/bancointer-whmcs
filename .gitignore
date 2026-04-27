@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 .agent/
 .claude/
 .vscode/
@@ -6,3 +7,30 @@ vendor/
 node_modules/
 *.log
 .env
+=======
+# Certificados e chaves privadas
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+
+# Dependências
+vendor/
+
+# Ambiente
+.env
+.env.*
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Arquivos de diagnóstico locais
+inter_diag.php
+>>>>>>> 89d66b5656e08a359328888bfd4058ebd3bf9dce
