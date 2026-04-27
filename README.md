@@ -114,7 +114,7 @@ o nome `seixastec_bancointer` com credenciais mascaradas.
 =======
 <div align="center">
 
-<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Banco_Inter_logo.svg/320px-Banco_Inter_logo.svg.png" alt="Banco Inter" width="180" />
+<img src="https://static.bancointer.com.br/blog/images/0234e7aa235244759b77f4f5c444fdbd_inter-logo.jpg" alt="Banco Inter" width="180" />
 
 # WHMCS — Banco Inter Gateway
 
@@ -341,4 +341,3 @@ Módulo desenvolvido para uso com WHMCS 9.x e API Inter Empresas.
 <div align="center">
   <sub>Feito com ☕ e PHP • Compatível com Banco Inter API Cobrança V3 + Pix V2</sub>
 </div>
->>>>>>> 89d66b5656e08a359328888bfd4058ebd3bf9dce
