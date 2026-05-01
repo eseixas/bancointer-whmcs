@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-05-01
+
+### Added
+- Implementado refund PIX nativo do WHMCS para pagamentos Banco Inter com `endToEndId`, incluindo devolução total/parcial, chamada `PUT /pix/v2/pix/{e2eId}/devolucao/{id}` e persistência do último refund no registro local.
+- Adicionados escopos OAuth `pix.read` e `pix.write` para suportar devoluções PIX.
+
 ## [1.4.1] - 2026-05-01
 
 ### Added

@@ -97,6 +97,16 @@ URL local exibida pelo módulo e para remover o registro quando necessário.
    e marca a transação como `PAID`.
 4. Hook `DailyCronJob` cancela cobranças vencidas além de `dias_baixa`.
 
+## Refund PIX
+
+O módulo implementa o refund nativo do WHMCS para pagamentos PIX que tenham
+`endToEndId` salvo no registro local. O admin pode solicitar devolução total ou
+parcial pelo formulário padrão de refund da transação no WHMCS.
+
+Para usar esta função, a integração do Banco Inter precisa ter os escopos
+`pix.write` e `pix.read` liberados. Transações antigas sem `endToEndId` são
+recusadas com instrução para devolução manual pelo Banco Inter.
+
 ## Logs
 
 Todas as chamadas à API são registradas em **Utilities → Logs → Gateway Log** sob

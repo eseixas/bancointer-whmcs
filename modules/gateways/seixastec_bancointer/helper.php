@@ -30,6 +30,7 @@ class BancoInterHelper
     public static function ensureSchema(): void
     {
         if (Capsule::schema()->hasTable(self::TABLE)) {
+            self::ensureRefundColumns();
             return;
         }
 
@@ -50,10 +51,42 @@ class BancoInterHelper
             $table->decimal("paid_amount", 12, 2)->nullable();
             $table->date("due_date")->nullable();
             $table->dateTime("paid_at")->nullable();
+            $table->string("refund_id", 35)->nullable()->index();
+            $table->string("refund_status", 30)->nullable();
+            $table->decimal("refund_amount", 12, 2)->nullable();
+            $table->mediumText("refund_raw_response")->nullable();
+            $table->dateTime("refunded_at")->nullable();
             $table->mediumText("raw_request")->nullable();
             $table->mediumText("raw_response")->nullable();
             $table->timestamps();
         });
+    }
+
+    private static function ensureRefundColumns(): void
+    {
+        $columns = [
+            "refund_id" => function ($table) {
+                $table->string("refund_id", 35)->nullable()->index();
+            },
+            "refund_status" => function ($table) {
+                $table->string("refund_status", 30)->nullable();
+            },
+            "refund_amount" => function ($table) {
+                $table->decimal("refund_amount", 12, 2)->nullable();
+            },
+            "refund_raw_response" => function ($table) {
+                $table->mediumText("refund_raw_response")->nullable();
+            },
+            "refunded_at" => function ($table) {
+                $table->dateTime("refunded_at")->nullable();
+            },
+        ];
+
+        foreach ($columns as $column => $definition) {
+            if (!Capsule::schema()->hasColumn(self::TABLE, $column)) {
+                Capsule::schema()->table(self::TABLE, $definition);
+            }
+        }
     }
 
     /** Fetch the latest transaction row for a given invoice. */
