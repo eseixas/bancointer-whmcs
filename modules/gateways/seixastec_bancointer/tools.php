@@ -25,12 +25,10 @@ if (!$params) {
 }
 
 $views = [
-    "license" => "Informacoes da Licenca",
     "config" => "Configuracoes",
     "webhook" => "Webhook",
     "extract" => "Extrato de Boletos",
     "metrics" => "Metricas de Emissao",
-    "templates" => "Templates de Mensagem",
     "logs" => "Logs",
     "webhook_logs" => "Logs Webhook",
 ];
@@ -96,7 +94,6 @@ $metrics = bi_loadMetrics();
 $extractRows = $view === "extract" ? bi_loadExtractRows($_GET) : [];
 $logRows = $view === "logs" ? bi_loadModuleLogs($_GET) : [];
 $webhookRows = $view === "webhook_logs" ? bi_loadWebhookLogs($_GET) : [];
-$templateRows = bi_loadTemplateRows();
 $logoUrl = bi_logoUrl();
 
 header("Content-Type: text/html; charset=utf-8");
@@ -128,9 +125,6 @@ foreach ($errors as $error) {
 }
 
 switch ($view) {
-    case "license":
-        bi_renderLicenseCard($params, $metrics);
-        break;
     case "config":
         bi_renderConfigCard($params, $customFieldOptions, $csrfToken);
         break;
@@ -142,9 +136,6 @@ switch ($view) {
         break;
     case "metrics":
         bi_renderMetricsCard($metrics);
-        break;
-    case "templates":
-        bi_renderTemplatesCard($templateRows);
         break;
     case "logs":
         bi_renderLogsCard($logRows, $systemUrl);
@@ -328,62 +319,13 @@ function bi_normalizeDateFilter($value): ?string
     return $value;
 }
 
-function bi_loadTemplateRows(): array
-{
-    $templates = [
-        ["title" => "Criacao de boleto", "type" => "email", "names" => ["Invoice Created"]],
-        ["title" => "Lembretes de pagamento", "type" => "email", "names" => ["Invoice Payment Reminder", "First Payment Reminder", "Second Payment Reminder", "Third Payment Reminder"]],
-        ["title" => "Anexo de boleto PDF", "type" => "hook", "names" => ["includes/hooks/seixastec_bancointer_email_pdf.php"]],
-    ];
-
-    $rows = [];
-    foreach ($templates as $index => $template) {
-        $status = false;
-        if ($template["type"] === "email" && Capsule::schema()->hasTable("tblemailtemplates")) {
-            $status = Capsule::table("tblemailtemplates")->whereIn("name", $template["names"])->exists();
-        }
-        if ($template["type"] === "hook") {
-            $status = file_exists(ROOTDIR . "/" . $template["names"][0]);
-        }
-
-        $rows[] = [
-            "id" => $index + 1,
-            "title" => $template["title"],
-            "type" => $template["type"],
-            "status" => $status,
-        ];
-    }
-
-    return $rows;
-}
-
-function bi_renderLicenseCard(array $params, array $metrics): void
-{
-    $certReady = !empty($params["cert_path"]) && !empty($params["key_path"]);
-    echo "<section class='bi-card'><div class='bi-card-title'>Informacoes da Licenca</div><div class='bi-card-body'>";
-    echo "<div class='bi-hero-copy'>";
-    echo "<h2>Integração com Banco Inter</h2>";
-    echo "<p>O módulo Boleto Banco Inter permite gerar boletos e dar baixa de forma automática diretamente do seu WHMCS.</p>";
-    echo "<h3>Features</h3>";
-    echo "<ul class='bi-feature-list'><li>Gera boletos registrados de forma automática.</li><li>Possível adicionar taxa de juros e multa diretamente pelo gateway.</li><li>Retorno automático usando webhook.</li></ul>";
-    echo "<p class='bi-signature'>Integration Developer<br>Seixas Tecnologia</p>";
-    echo "</div>";
-    echo "<table class='bi-table bi-table-meta'>";
-    echo "<tr><th>Modulo</th><td>Banco Inter Boleto e PIX</td></tr>";
-    echo "<tr><th>Status do Gateway</th><td>" . (!empty($params["type"]) ? "Ativo" : "Inativo") . "</td></tr>";
-    echo "<tr><th>Integracao mTLS</th><td>" . ($certReady ? "Certificado configurado" : "Certificado pendente") . "</td></tr>";
-    echo "<tr><th>System URL</th><td><code>" . htmlspecialchars($params["systemurl"] ?? "", ENT_QUOTES) . "</code></td></tr>";
-    echo "<tr><th>Total de cobrancas locais</th><td>" . (int) $metrics["total"] . "</td></tr>";
-    echo "</table></div></section>";
-}
-
 function bi_renderConfigCard(array $params, array $customFieldOptions, string $csrfToken): void
 {
     echo "<section class='bi-card'><div class='bi-card-title'>Configuracoes do sistema</div><div class='bi-card-body'>";
     echo "<form method='post' class='bi-form-grid'>";
     echo "<input type='hidden' name='csrf_token' value='{$csrfToken}'>";
     echo "<input type='hidden' name='action' value='save_config'>";
-    echo "<div class='bi-form-intro bi-form-span'><h2>Integração com Banco Inter</h2><p>O módulo Boleto Banco Inter permite gerar boletos e dar baixa de forma automática diretamente do seu WHMCS.</p><ul class='bi-feature-list'><li>Gera boletos registrados de forma automática.</li><li>Possível adicionar taxa de juros e multa diretamente pelo gateway.</li><li>Retorno automático usando webhook.</li></ul><p class='bi-signature'>Integration Developer<br>Seixas Tecnologia</p></div>";
+    echo "<div class='bi-form-intro bi-form-span'><h2>Credenciais e regras de cobranca</h2><p>Configure a API Banco Inter, certificados mTLS e regras financeiras usadas na emissao das cobrancas.</p></div>";
     bi_inputRow("Client ID", "client_id", (string) ($params["client_id"] ?? ""));
     bi_inputRow("Client Secret", "client_secret", (string) ($params["client_secret"] ?? ""), "password");
     bi_inputRow("Conta Corrente", "conta_corrente", (string) ($params["conta_corrente"] ?? ""));
@@ -445,21 +387,6 @@ function bi_renderMetricsCard(array $metrics): void
     bi_metric("Canceladas", (string) $metrics["cancelled"]);
     bi_metric("Volume recebido", "R$ " . number_format((float) $metrics["volume"], 2, ",", "."));
     echo "</div></div></section>";
-}
-
-function bi_renderTemplatesCard(array $rows): void
-{
-    echo "<section class='bi-card'><div class='bi-card-title'>Templates</div><div class='bi-card-body'>";
-    echo "<table class='bi-table'><thead><tr><th>ID</th><th>Titulo</th><th>Tipo</th><th>Status</th></tr></thead><tbody>";
-    foreach ($rows as $row) {
-        echo "<tr>";
-        echo "<td>" . (int) $row["id"] . "</td>";
-        echo "<td>" . htmlspecialchars($row["title"], ENT_QUOTES) . "</td>";
-        echo "<td>" . htmlspecialchars($row["type"], ENT_QUOTES) . "</td>";
-        echo "<td><span class='bi-status " . ($row["status"] ? "is-success" : "is-danger") . "'>" . ($row["status"] ? "Ativo" : "Inativo") . "</span></td>";
-        echo "</tr>";
-    }
-    echo "</tbody></table></div></section>";
 }
 
 function bi_renderLogsCard(array $rows, ?string $systemUrl = null): void
@@ -577,64 +504,65 @@ function bi_transactionsTable(array $rows, bool $showDueDate): string
 function bi_adminCss(): string
 {
     return <<<CSS
-body{margin:0;background:#efefef;font-family:"Segoe UI",Tahoma,sans-serif;color:#3b3b3b}
-.bi-topbar{padding:14px;background:#f8f8f8;border-bottom:1px solid #e2e2e2}
-.bi-brand{display:flex;align-items:center;gap:18px}
-.bi-brand-logo{display:block;max-height:72px;width:auto}
-.bi-brand-copy h1{margin:0;font-size:30px;font-weight:600;color:#3a3a3a}
-.bi-brand-copy p{margin:4px 0 0;color:#7a7a7a;font-size:15px}
-.bi-shell{display:flex;gap:18px;padding:18px}
-.bi-sidebar{width:320px;background:#f6f6f6;border:1px solid #d9d9d9;border-radius:4px;overflow:hidden;height:max-content}
-.bi-side-link{display:block;padding:16px 20px;color:#555;text-decoration:none;border-bottom:1px solid #d9d9d9;background:#fafafa}
+body{margin:0;background:#f2f3f5;font-family:"Segoe UI",Tahoma,sans-serif;color:#333;font-size:13px}
+.bi-topbar{padding:10px 14px;background:#f8f8f8;border-bottom:1px solid #e2e2e2}
+.bi-brand{display:flex;align-items:center;gap:12px}
+.bi-brand-logo{display:block;max-height:46px;width:auto}
+.bi-brand-copy h1{margin:0;font-size:20px;font-weight:600;color:#333}
+.bi-brand-copy p{margin:2px 0 0;color:#777;font-size:12px}
+.bi-shell{display:flex;gap:14px;padding:14px}
+.bi-sidebar{width:230px;background:#f6f6f6;border:1px solid #d9d9d9;border-radius:4px;overflow:hidden;height:max-content}
+.bi-side-link{display:block;padding:10px 14px;color:#555;text-decoration:none;border-bottom:1px solid #d9d9d9;background:#fafafa;font-size:13px}
 .bi-side-link.is-active,.bi-side-link:hover{background:#f0f0f0}
 .bi-main{flex:1}
-.bi-breadcrumb{background:#f6f6f6;border:1px solid #e0e0e0;border-radius:4px;padding:10px 14px;margin-bottom:18px;color:#777}
+.bi-breadcrumb{background:#f6f6f6;border:1px solid #e0e0e0;border-radius:4px;padding:8px 12px;margin-bottom:14px;color:#777;font-size:12px}
 .bi-breadcrumb span{margin:0 8px;color:#b8b8b8}
 .bi-card{background:#fff;border:1px solid #dcdcdc;border-radius:4px;overflow:hidden}
-.bi-card-title{padding:14px 18px;background:#f6f6f6;border-bottom:1px solid #e6e6e6;font-size:30px;font-weight:300;color:#444}
-.bi-card-body{padding:22px}
-.bi-alert{padding:14px 16px;border-radius:4px;margin-bottom:16px}
+.bi-card-title{padding:10px 14px;background:#f6f6f6;border-bottom:1px solid #e6e6e6;font-size:18px;font-weight:600;color:#444}
+.bi-card-body{padding:16px}
+.bi-alert{padding:10px 12px;border-radius:4px;margin-bottom:12px}
 .bi-alert-success{background:#ebf7ec;color:#2d6b36;border:1px solid #bfe0c3}
 .bi-alert-error{background:#fff0f0;color:#943c3c;border:1px solid #efc4c4}
-.bi-form-grid{display:grid;grid-template-columns:190px minmax(0,1fr);gap:16px 22px;align-items:center}
+.bi-form-grid{display:grid;grid-template-columns:170px minmax(0,720px);gap:10px 16px;align-items:center}
 .bi-form-span{grid-column:1 / -1}
-.bi-form-label{font-size:26px;color:#333}
-.bi-form-control input,.bi-form-control select,.bi-readonly{width:100%;box-sizing:border-box;border:1px solid #cfcfcf;padding:12px 10px;font-size:15px;background:#fff}
+.bi-form-label{font-size:13px;color:#333;font-weight:600}
+.bi-form-control input,.bi-form-control select,.bi-readonly{width:100%;box-sizing:border-box;border:1px solid #c7c7c7;border-radius:3px;padding:7px 9px;font-size:13px;line-height:1.35;background:#fff;min-height:34px}
 .bi-readonly{background:#f7f7f7}
-.bi-form-actions{grid-column:2;display:flex;justify-content:flex-start;padding-top:8px}
-.bi-toggle{display:flex;align-items:center;gap:10px;font-size:15px}
-.bi-toggle input{width:18px;height:18px}
-.bi-btn{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:3px;padding:12px 16px;font-size:15px;text-decoration:none;cursor:pointer}
+.bi-form-actions{grid-column:2;display:flex;justify-content:flex-start;padding-top:6px}
+.bi-toggle{display:flex;align-items:center;gap:8px;font-size:13px}
+.bi-toggle input{width:16px;height:16px}
+.bi-btn{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:3px;padding:8px 12px;font-size:13px;text-decoration:none;cursor:pointer;line-height:1.35}
 .bi-btn-primary{background:#3b7bbb;color:#fff}
-.bi-btn-secondary{background:#3b7bbb;color:#fff;margin-top:8px}
+.bi-btn-secondary{background:#3b7bbb;color:#fff;margin-top:6px}
 .bi-btn-success{background:#4caf50;color:#fff}
 .bi-btn-danger{background:#d9534f;color:#fff}
-.bi-btn-block{width:100%;font-size:16px}
+.bi-btn-block{width:100%;font-size:13px}
 .bi-inline-form{margin-top:6px}
-.bi-action-stack{margin-top:18px;display:grid;gap:10px}
+.bi-action-stack{margin-top:14px;display:grid;gap:8px;max-width:360px}
 .bi-table{width:100%;border-collapse:collapse}
-.bi-table th,.bi-table td{border:1px solid #d8d8d8;padding:12px 10px;text-align:left;vertical-align:top}
+.bi-table th,.bi-table td{border:1px solid #d8d8d8;padding:8px 9px;text-align:left;vertical-align:top;font-size:13px}
 .bi-table th{background:#fbfbfb;font-weight:600}
-.bi-table-meta th{width:36%}
-.bi-filter-row{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;margin-bottom:18px;align-items:end}
-.bi-filter-row label{display:block;margin-bottom:6px;font-size:15px}
-.bi-filter-row input{width:100%;box-sizing:border-box;border:1px solid #cfcfcf;padding:11px 10px}
+.bi-table-meta th{width:210px}
+.bi-filter-row{display:grid;grid-template-columns:minmax(0,180px) minmax(0,180px) auto;gap:10px;margin-bottom:14px;align-items:end}
+.bi-filter-row label{display:block;margin-bottom:4px;font-size:12px;font-weight:600}
+.bi-filter-row input{width:100%;box-sizing:border-box;border:1px solid #cfcfcf;padding:7px 9px;font-size:13px}
 .bi-filter-action{padding-bottom:1px}
-.bi-empty{padding:20px;border:1px dashed #cfcfcf;background:#fafafa;color:#666}
+.bi-empty{padding:14px;border:1px dashed #cfcfcf;background:#fafafa;color:#666}
 .bi-pre{white-space:pre-wrap;margin:0;font-size:12px;line-height:1.4;max-width:100%;overflow:auto}
-.bi-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
-.bi-metric{padding:18px;background:#f7f7f7;border:1px solid #dedede;border-radius:4px}
-.bi-metric span{display:block;font-size:14px;color:#777;margin-bottom:8px}
-.bi-metric strong{font-size:28px;font-weight:600;color:#343434}
-.bi-status{display:inline-block;padding:4px 10px;border-radius:999px;font-size:13px}
+.bi-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.bi-metric{padding:12px;background:#f7f7f7;border:1px solid #dedede;border-radius:4px}
+.bi-metric span{display:block;font-size:12px;color:#777;margin-bottom:6px}
+.bi-metric strong{font-size:20px;font-weight:600;color:#343434}
+.bi-status{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px}
 .bi-status.is-success{background:#e6f7ea;color:#2d6b36}
 .bi-status.is-danger{background:#fdeaea;color:#9d3c3c}
-.bi-note{margin-top:14px;padding:12px 14px;border-radius:4px}
+.bi-note{margin-top:12px;padding:10px 12px;border-radius:4px}
 .bi-note-warning{background:#fff6db;color:#9a6a00;border:1px solid #efd48a}
-.bi-hero-copy{margin-bottom:20px}
-.bi-hero-copy h2,.bi-form-intro h2{margin:0 0 8px;font-size:28px;font-weight:500;color:#2f2f2f}
-.bi-hero-copy h3{margin:20px 0 10px;font-size:18px;color:#4b4b4b}
-.bi-hero-copy p,.bi-form-intro p{margin:0 0 10px;color:#676767;font-size:15px;line-height:1.6}
+.bi-form-intro{margin-bottom:4px;padding:10px 12px;background:#f8f8f8;border:1px solid #e1e1e1;border-radius:4px}
+.bi-hero-copy{margin-bottom:16px}
+.bi-hero-copy h2,.bi-form-intro h2{margin:0 0 4px;font-size:16px;font-weight:600;color:#2f2f2f}
+.bi-hero-copy h3{margin:16px 0 8px;font-size:15px;color:#4b4b4b}
+.bi-hero-copy p,.bi-form-intro p{margin:0;color:#676767;font-size:13px;line-height:1.45}
 .bi-feature-list{margin:0 0 14px 18px;padding:0;color:#505050}
 .bi-feature-list li{margin:0 0 8px}
 .bi-signature{font-size:14px;color:#6e6e6e}

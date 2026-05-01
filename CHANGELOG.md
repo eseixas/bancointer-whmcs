@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-05-01
+
+### Added
+- Adicionado addon administrativo `seixastec_bancointer_admin` para expor o painel Banco Inter no menu **Addons** do WHMCS.
+
+### Changed
+- Painel administrativo abre por padrão em **Configurações** em vez da tela de licença.
+- Removidas as áreas **Informações da Licença** e **Templates de Mensagem** do painel.
+- Compactada a interface do painel administrativo, reduzindo tamanhos de títulos, labels, campos, botões, filtros e tabelas.
+- Documentação do webhook agora mostra a URL com `?token=...` e orienta re-registrar o webhook após rotação do token.
+
+### Fixed
+- Callback do Banco Inter agora usa o nome técnico do gateway ao chamar `addInvoicePayment()`.
+- Callback aceita payloads em lote, payloads Pix aninhados e conciliação por `codigoSolicitacao`, `nossoNumero`, `txid`, `endToEndId` ou `seuNumero`.
+- Callback registra rejeições importantes como token inválido, payload sem identificador, status não pago, invoice inválida e transação duplicada.
+- Callback tolera atraso da API após pagamento Pix, usando o webhook autenticado quando o evento traz valor, identificador Pix ou data de pagamento.
+
 ## [1.4.0] - 2026-05-01
 
 ### Changed

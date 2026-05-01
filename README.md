@@ -16,6 +16,7 @@ modules/gateways/seixastec_bancointer/generate.php
 modules/gateways/seixastec_bancointer/tools.php
 modules/gateways/seixastec_bancointer/inter.png
 modules/gateways/callback/seixastec_bancointer.php
+modules/addons/seixastec_bancointer_admin/seixastec_bancointer_admin.php
 includes/hooks/seixastec_bancointer_auto_generate.php
 includes/hooks/seixastec_bancointer_email_pdf.php
 ```
@@ -37,8 +38,13 @@ Se o WHMCS não exibir esse botão na tela do gateway, você pode abrir o painel
 diretamente por:
 
 ```text
-https://seu-whmcs.com/modules/gateways/seixastec_bancointer/admin.php?view=license
+https://seu-whmcs.com/modules/gateways/seixastec_bancointer/admin.php?view=config
 ```
+
+Para deixar o painel disponível no menu administrativo padrão do WHMCS, ative
+o addon **Banco Inter Boleto e PIX** em **System Settings → Addon Modules** e
+libere o acesso para o grupo de administradores desejado. Depois disso, o painel
+fica acessível pelo menu **Addons**.
 
 ## Certificados mTLS
 
@@ -72,11 +78,14 @@ No painel administrativo, acesse **Webhook** e clique em **Atualizar Webhook**.
 O sistema faz `PUT /cobranca/v3/cobrancas/webhook` apontando para:
 
 ```
-https://seu-whmcs.com/modules/gateways/callback/seixastec_bancointer.php
+https://seu-whmcs.com/modules/gateways/callback/seixastec_bancointer.php?token=TOKEN_DE_SEGURANCA
 ```
 
-Use a própria tela de **Webhook** para conferir o status, gerar um novo token
-de segurança e remover o registro quando necessário.
+O `TOKEN_DE_SEGURANCA` é gerado pelo módulo e aparece na tela **Webhook** do
+painel administrativo. Sempre que gerar ou rotacionar esse token, clique em
+**Atualizar Webhook** novamente para registrar a nova URL no Banco Inter.
+Use a própria tela de **Webhook** para conferir se a URL remota está igual à
+URL local exibida pelo módulo e para remover o registro quando necessário.
 
 ## Fluxo de pagamento
 
@@ -98,7 +107,7 @@ o nome `seixastec_bancointer` com credenciais mascaradas.
 - **"cert_path unreadable"** — verifique `ls -l` e ownership; o usuário do
   PHP-FPM precisa ter permissão de leitura no `.crt` e `.key`.
 - **"Invalid JSON payload" no webhook** — confirme se o webhook está
-  registrado pela URL correta (use o botão *Consultar*).
+  registrado pela URL correta, incluindo o `?token=...` exibido no painel.
 - **PDF não anexa ao e-mail** — verifique o `logModuleCall` da tag
   `hook.email_pdf`; cobranças criadas fora do fluxo WHMCS não têm registro
   local e portanto não são anexadas.

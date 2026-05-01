@@ -46,12 +46,12 @@ function seixastec_bancointer_config(): array
     }
 
     $systemUrl = BancoInterHelper::systemUrl();
-    $adminUrl = $systemUrl ? ($systemUrl . "/modules/gateways/seixastec_bancointer/admin.php?view=license") : "";
+    $adminUrl = $systemUrl ? ($systemUrl . "/modules/gateways/seixastec_bancointer/admin.php?view=config") : "";
     $adminHtml = $adminUrl
         ? sprintf(
             '<div style="line-height:1.8">' .
               '<div style="margin:12px 0 18px;padding:14px 16px;background:#fff5d8;border:1px solid #f0d58a;border-radius:4px;color:#8a6a00">' .
-              '<strong>INFO:</strong> o painel abaixo centraliza licença, configurações, webhook, extrato, métricas e logs.' .
+              '<strong>INFO:</strong> o painel abaixo centraliza configurações, webhook, extrato, métricas e logs.' .
               '</div>' .
               '<div style="margin:0 0 16px">' .
               '<a class="btn btn-primary" href="%s" target="_blank">Abrir Painel Administrativo em Nova Aba</a>' .
@@ -228,12 +228,29 @@ HTML;
     $hasLinhaDigitavel = $linhaDigitavelRaw !== "";
 
     if (!empty($tx->pix_qrcode_base64)) {
-        $qr = '<img alt="PIX QR Code" style="max-width:240px" src="data:image/png;base64,' . htmlspecialchars((string) $tx->pix_qrcode_base64, ENT_QUOTES) . '">';
+        $qrMime = (strpos((string) $tx->pix_qrcode_base64, 'PHN2Z') === 0 || strpos((string) $tx->pix_qrcode_base64, 'PD94') === 0)
+            ? 'image/svg+xml' : 'image/png';
+        $qr = '<img alt="PIX QR Code" style="max-width:240px" src="data:' . $qrMime . ';base64,' . htmlspecialchars((string) $tx->pix_qrcode_base64, ENT_QUOTES) . '">';
     } elseif ($pixCopyRaw !== "") {
-        // Inter v3 não devolve o QR como imagem — renderiza no servidor a partir do pixCopiaECola.
-        $qrUrl = rtrim($params["systemurl"], "/")
-            . "/modules/gateways/seixastec_bancointer/generate.php?action=qr&invoiceid=" . $invoiceId;
-        $qr = '<img alt="PIX QR Code" style="max-width:240px" src="' . htmlspecialchars($qrUrl, ENT_QUOTES) . '">';
+        // Renderiza QR inline para evitar dependência de sessão em requisição separada.
+        try {
+            $qrImage = seixastec_bancointer_renderPixQr($pixCopyRaw, 240);
+            $isSvg = strpos($qrImage, '<svg') !== false || strpos($qrImage, '<?xml') === 0;
+            $qrMime = $isSvg ? 'image/svg+xml' : 'image/png';
+            $qrEncoded = base64_encode($qrImage);
+            $qr = '<img alt="PIX QR Code" style="max-width:240px" src="data:' . $qrMime . ';base64,' . $qrEncoded . '">';
+            // Persiste para evitar reprocessamento nas próximas visitas.
+            if (!empty($tx->codigo_solicitacao)) {
+                BancoInterHelper::saveTransaction([
+                    "invoice_id" => (int) $tx->invoice_id,
+                    "codigo_solicitacao" => (string) $tx->codigo_solicitacao,
+                    "pix_qrcode_base64" => $qrEncoded,
+                ]);
+            }
+        } catch (Throwable $e) {
+            BancoInterHelper::log("link.qr_render_failed", ["invoiceid" => $invoiceId], $e->getMessage());
+            $qr = "";
+        }
     } else {
         $qr = "";
     }

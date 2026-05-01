@@ -18,7 +18,7 @@ class BancoInterHelper
     public const TABLE = "mod_seixastec_bancointer_transactions";
     public const LOG_GATEWAY = "seixastec_bancointer";
     // Local synonyms (PENDING/CREATED/PROCESSING) + situações reais da API cobrança v3 do Inter.
-    private const NON_TERMINAL_STATUSES = ["PENDING", "CREATED", "PROCESSING", "A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO"];
+    private const NON_TERMINAL_STATUSES = ["PENDING", "CREATED", "PROCESSING", "A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO", "VENCIDO"];
     public const TERMINAL_CANCELLED_STATUSES = ["CANCELLED", "EXPIRED", "CANCELADO", "EXPIRADO"];
     public const TERMINAL_PAID_STATUSES = ["PAID", "RECEBIDO", "MARCADO_RECEBIDO"];
 
