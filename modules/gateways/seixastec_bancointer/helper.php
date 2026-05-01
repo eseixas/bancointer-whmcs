@@ -341,7 +341,12 @@ class BancoInterHelper
         }
 
         $expected = $_SESSION["seixastec_bancointer_csrf"][$scope] ?? null;
-        return is_string($expected) && is_string($token) && hash_equals($expected, $token);
+        $isValid = is_string($expected) && is_string($token) && hash_equals($expected, $token);
+        if ($isValid) {
+            unset($_SESSION["seixastec_bancointer_csrf"][$scope]);
+        }
+
+        return $isValid;
     }
 
     public static function systemUrl(): string

@@ -74,6 +74,7 @@ if (in_array($action, ["qr", "pdf", "qr_diag"], true)) {
             }
 
             $tx = BancoInterHelper::findByInvoice($invoiceId);
+            $tx = seixastec_bancointer_refreshCollectionIfNeeded($tx, $params, true);
             if (!$tx || empty($tx->pix_copia_cola)) {
                 http_response_code(404);
                 header("Content-Type: text/plain; charset=utf-8");
@@ -86,7 +87,7 @@ if (in_array($action, ["qr", "pdf", "qr_diag"], true)) {
                 BancoInterHelper::log("generate.qr_failed", ["invoiceid" => $invoiceId], $qrError->getMessage());
                 http_response_code(500);
                 header("Content-Type: text/plain; charset=utf-8");
-                exit("QR render error: " . $qrError->getMessage());
+                exit("Erro ao processar QR Code Banco Inter.");
             }
 
             // Detect SVG vs PNG by inspecting the byte header.
@@ -129,7 +130,7 @@ if (in_array($action, ["qr", "pdf", "qr_diag"], true)) {
         BancoInterHelper::log("generate.php", ["invoiceid" => $invoiceId, "action" => $action], $e->getMessage());
         http_response_code(500);
         header("Content-Type: text/plain; charset=utf-8");
-        echo "Erro: " . $e->getMessage();
+        echo "Erro ao processar a solicitacao Banco Inter.";
         exit;
     }
 }

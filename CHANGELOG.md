@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-05-01
+
+### Changed
+- O painel administrativo Banco Inter agora fica apenas dentro da configuração do gateway/ponto `modules/gateways/seixastec_bancointer/admin.php`; a instalação não deve mais expor o addon legado em **Addons**.
+- O bloco de pagamento no invoice agora tenta atualizar a cobrança no Banco Inter quando já existe `codigo_solicitacao`, mas ainda faltam QR Code PIX, PIX copia e cola ou linha digitável no registro local.
+- O endpoint de QR Code (`generate.php?action=qr`) também força uma atualização da cobrança antes de retornar erro por PIX ausente.
+- O token CSRF agora é invalidado após validação bem-sucedida, forçando novo token para a próxima ação sensível.
+- Os filtros de data do painel administrativo agora validam datas em formato `YYYY-MM-DD` antes de aplicar consultas.
+
+### Fixed
+- Removido o addon legado `Seixastec Bancointer Admin` do pacote.
+- Corrigido o invoice para não renderizar botão de copiar PIX, QR Code ou linha digitável vazios quando a API do Inter ainda está processando os dados da cobrança.
+- Adicionada mensagem clara de "dados de pagamento em processamento" quando a cobrança foi emitida, mas o Inter ainda não retornou os campos de pagamento.
+- Resolvidos marcadores de conflito remanescentes no `README.md`.
+- Removida a função pública `seixastec_bancointer_refund()` para impedir que o WHMCS exponha reembolso automático não suportado pelo Banco Inter.
+- Endpoints binários de QR/PDF e falhas de geração automática deixam de expor mensagens internas de exceção ao cliente.
+- Métricas do painel administrativo agora escapam HTML antes de renderizar os valores.
+- Extrato, logs do módulo e logs de webhook exibem aviso quando a listagem atinge o limite de 100 registros.
+- Resolvidos marcadores de conflito remanescentes no `.gitignore`.
+
 ## [1.3.0] - 2026-04-27
 
 ### Added

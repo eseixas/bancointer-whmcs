@@ -185,13 +185,13 @@ function seixastec_bancointer_link(array $params): string
                 $row = seixastec_bancointer_generateForInvoice($invoiceId, $userId, $amount, $dueDate, $params);
                 $tx = (object) $row;
             } catch (Throwable $e) {
-                $errorMsg = htmlspecialchars($e->getMessage(), ENT_QUOTES);
+                BancoInterHelper::log("invoice.auto_generate_failed", ["invoiceid" => $invoiceId], $e->getMessage());
                 $generateUrl = rtrim($params["systemurl"], "/") . "/modules/gateways/seixastec_bancointer/generate.php";
                 $csrfToken = htmlspecialchars(BancoInterHelper::issueCsrfToken("client_generate_invoice"), ENT_QUOTES);
                 return <<<HTML
 <div class="bancointer-pay" style="border:1px solid #e6e6e6;border-radius:8px;padding:16px;margin-top:16px;background:#fff8f8;border-color:#ffcccc">
     <h4 style="margin-top:0;color:#d9534f">Falha ao gerar cobrança automática</h4>
-    <p style="color:#d9534f">{$errorMsg}</p>
+    <p style="color:#d9534f">Nao foi possivel gerar a cobranca Banco Inter neste momento.</p>
     <form method="post" action="{$generateUrl}">
         <input type="hidden" name="invoiceid" value="{$invoiceId}">
         <input type="hidden" name="csrf_token" value="{$csrfToken}">
@@ -220,11 +220,14 @@ HTML;
         }
     }
 
-    $linhaDigitavel = htmlspecialchars((string) $tx->linha_digitavel, ENT_QUOTES);
-    $pixCopy = htmlspecialchars((string) $tx->pix_copia_cola, ENT_QUOTES);
-    $pixCopyRaw = (string) $tx->pix_copia_cola;
+    $tx = seixastec_bancointer_refreshCollectionIfNeeded($tx, $params);
 
-    if ($tx->pix_qrcode_base64) {
+    $linhaDigitavelRaw = trim((string) ($tx->linha_digitavel ?? ""));
+    $pixCopyRaw = (string) ($tx->pix_copia_cola ?? "");
+    $hasPix = $pixCopyRaw !== "" || !empty($tx->pix_qrcode_base64);
+    $hasLinhaDigitavel = $linhaDigitavelRaw !== "";
+
+    if (!empty($tx->pix_qrcode_base64)) {
         $qr = '<img alt="PIX QR Code" style="max-width:240px" src="data:image/png;base64,' . htmlspecialchars((string) $tx->pix_qrcode_base64, ENT_QUOTES) . '">';
     } elseif ($pixCopyRaw !== "") {
         // Inter v3 não devolve o QR como imagem — renderiza no servidor a partir do pixCopiaECola.
@@ -238,29 +241,47 @@ HTML;
     $pdfUrl = rtrim($params["systemurl"], "/")
         . "/modules/gateways/seixastec_bancointer/generate.php?action=pdf&invoiceid=" . $invoiceId;
 
-    $status = htmlspecialchars((string) $tx->status, ENT_QUOTES);
-    $due = $tx->due_date ? date("d/m/Y", strtotime((string) $tx->due_date)) : "—";
+    $status = htmlspecialchars((string) ($tx->status ?? "PENDING"), ENT_QUOTES);
+    $due = !empty($tx->due_date) ? date("d/m/Y", strtotime((string) $tx->due_date)) : "—";
 
-    $pixAttr = htmlspecialchars($pixCopyRaw, ENT_QUOTES);
-
-    return <<<HTML
+    if (!$hasPix && !$hasLinhaDigitavel) {
+        return <<<HTML
 <div class="bancointer-pay" style="border:1px solid #e6e6e6;border-radius:8px;padding:16px;margin-top:16px">
     <h4 style="margin-top:0">Banco Inter Boleto e PIX</h4>
     <p><strong>Status:</strong> {$status} · <strong>Vencimento:</strong> {$due}</p>
+    <div style="padding:12px 14px;border:1px solid #f0d58a;background:#fff8dc;border-radius:4px;color:#8a6a00">
+        Cobrança emitida no Banco Inter. Os dados de pagamento ainda estão em processamento; recarregue a fatura em instantes.
+    </div>
+</div>
+HTML;
+    }
 
-    <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
-        <div style="display:flex;justify-content:center">{$qr}</div>
+    $qrBlock = $qr !== ""
+        ? '<div style="display:flex;justify-content:center">' . $qr . '</div>'
+        : "";
+
+    $pixAttr = htmlspecialchars($pixCopyRaw, ENT_QUOTES);
+    $pixButton = $pixCopyRaw !== ""
+        ? <<<HTML
         <button type="button" class="bancointer-copy-pix"
                 data-pix="{$pixAttr}"
                 style="width:260px;padding:10px 14px;border:none;border-radius:4px;background:#1e63c0;color:#fff;font-weight:600;cursor:pointer;font-size:14px">Copiar PIX Copia e Cola</button>
         <div class="bancointer-copy-status" style="font-size:12px;color:#2d6b36;min-height:16px"></div>
+HTML
+        : "";
+
+    $linhaDigitavel = htmlspecialchars($linhaDigitavelRaw, ENT_QUOTES);
+    $linhaBlock = $hasLinhaDigitavel
+        ? <<<HTML
         <div style="width:100%;max-width:420px">
             <label style="display:block;text-align:center;margin-bottom:4px">Linha digitável</label>
             <input type="text" readonly onclick="this.select()" value="{$linhaDigitavel}" style="width:100%;font-family:monospace;text-align:center">
         </div>
-        <a class="btn btn-primary" href="{$pdfUrl}" target="_blank">Baixar Boleto (PDF)</a>
-    </div>
-</div>
+HTML
+        : "";
+
+    $copyScript = $pixCopyRaw !== ""
+        ? <<<HTML
 <script>
 (function(){
     document.querySelectorAll(".bancointer-copy-pix").forEach(function(btn){
@@ -284,14 +305,25 @@ HTML;
     });
 })();
 </script>
+HTML
+        : "";
+
+    return <<<HTML
+<div class="bancointer-pay" style="border:1px solid #e6e6e6;border-radius:8px;padding:16px;margin-top:16px">
+    <h4 style="margin-top:0">Banco Inter Boleto e PIX</h4>
+    <p><strong>Status:</strong> {$status} · <strong>Vencimento:</strong> {$due}</p>
+
+    <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
+        {$qrBlock}
+{$pixButton}
+{$linhaBlock}
+        <a class="btn btn-primary" href="{$pdfUrl}" target="_blank">Baixar Boleto (PDF)</a>
+    </div>
+</div>
+{$copyScript}
 HTML;
 }
 
-/**
- * WHMCS refund callback. Banco Inter does not expose programmatic refund for
- * cobrança v3 — the closest action is cancelling the collection before
- * payment; surface that behaviour to operators but fail loudly if already paid.
- */
 /* -------------------------------------------------- shared helpers
  * Exposed as top-level functions because WHMCS loads gateway modules with
  * require_once; every caller (generate.php, tools.php, callback, hooks)
@@ -434,26 +466,91 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         logTransaction($params["paymentmethod"] ?? "seixastec_bancointer", array_merge($payload, ["RESPONSE" => $response]), "Cobrança Gerada: " . ($response["codigoSolicitacao"] ?? "Desconhecido"));
     }
 
+    $row = seixastec_bancointer_collectionRowFromResponse($invoiceId, $response, [
+        "seu_numero" => (string) $invoiceId,
+        "amount" => round($amount, 2),
+        "due_date" => $dueDate,
+        "raw_request" => json_encode($payload, JSON_UNESCAPED_UNICODE),
+    ]);
+
+    BancoInterHelper::saveTransaction($row);
+
+    return $row;
+}
+
+function seixastec_bancointer_collectionRowFromResponse(int $invoiceId, array $response, array $extra = []): array
+{
     $row = [
         "invoice_id" => $invoiceId,
+    ];
+
+    $fieldMap = [
         "codigo_solicitacao" => $response["codigoSolicitacao"] ?? null,
         "nosso_numero" => $response["boleto"]["nossoNumero"] ?? null,
-        "seu_numero" => (string) $invoiceId,
         "txid" => $response["pix"]["txid"] ?? null,
         "pix_copia_cola" => $response["pix"]["pixCopiaECola"] ?? null,
         "pix_qrcode_base64" => seixastec_bancointer_extractQrBase64($response),
         "linha_digitavel" => $response["boleto"]["linhaDigitavel"] ?? null,
         "codigo_barras" => $response["boleto"]["codigoBarras"] ?? null,
-        "status" => strtoupper((string) ($response["situacao"] ?? "PENDING")),
-        "amount" => round($amount, 2),
-        "due_date" => $dueDate,
-        "raw_request" => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        "raw_response" => json_encode($response, JSON_UNESCAPED_UNICODE),
     ];
 
-    BancoInterHelper::saveTransaction($row);
+    foreach ($fieldMap as $field => $value) {
+        if ($value !== null && $value !== "") {
+            $row[$field] = $value;
+        }
+    }
 
-    return $row;
+    if (!empty($response["situacao"])) {
+        $row["status"] = strtoupper((string) $response["situacao"]);
+    } elseif (!isset($extra["status"])) {
+        $row["status"] = "PENDING";
+    }
+
+    $row["raw_response"] = json_encode($response, JSON_UNESCAPED_UNICODE);
+
+    return array_merge($row, $extra);
+}
+
+function seixastec_bancointer_transactionNeedsRefresh(?object $tx): bool
+{
+    if (!$tx || empty($tx->codigo_solicitacao)) {
+        return false;
+    }
+
+    $hasLinhaDigitavel = trim((string) ($tx->linha_digitavel ?? "")) !== "";
+    $hasPix = trim((string) ($tx->pix_copia_cola ?? "")) !== "" || trim((string) ($tx->pix_qrcode_base64 ?? "")) !== "";
+
+    return !$hasLinhaDigitavel || !$hasPix;
+}
+
+function seixastec_bancointer_refreshCollectionIfNeeded(?object $tx, array $params, bool $force = false): ?object
+{
+    if (!$tx || empty($tx->codigo_solicitacao)) {
+        return $tx;
+    }
+
+    if (!$force && !seixastec_bancointer_transactionNeedsRefresh($tx)) {
+        return $tx;
+    }
+
+    try {
+        $response = seixastec_bancointer_buildApi($params)->getCollection((string) $tx->codigo_solicitacao);
+        $row = seixastec_bancointer_collectionRowFromResponse((int) $tx->invoice_id, $response, [
+            "codigo_solicitacao" => (string) $tx->codigo_solicitacao,
+            "seu_numero" => (string) ($tx->seu_numero ?? $tx->invoice_id),
+            "amount" => $tx->amount ?? null,
+            "due_date" => $tx->due_date ?? null,
+        ]);
+        BancoInterHelper::saveTransaction($row);
+
+        return BancoInterHelper::findByInvoice((int) $tx->invoice_id) ?: $tx;
+    } catch (Throwable $e) {
+        BancoInterHelper::log("collection.refresh_failed", [
+            "invoice_id" => (int) $tx->invoice_id,
+            "codigo_solicitacao" => (string) $tx->codigo_solicitacao,
+        ], $e->getMessage());
+        return $tx;
+    }
 }
 
 /**
@@ -528,44 +625,4 @@ function seixastec_bancointer_extractQrBase64(array $response): ?string
         }
     }
     return null;
-}
-
-function seixastec_bancointer_refund(array $params): array
-{
-    try {
-        $tx = BancoInterHelper::findByInvoice((int) $params["invoiceid"]);
-        if (!$tx || empty($tx->codigo_solicitacao)) {
-            return [
-                "status" => "error",
-                "rawdata" => "Nenhuma cobrança Banco Inter encontrada para esta fatura.",
-            ];
-        }
-
-        if ($tx->status === "PAID") {
-            return [
-                "status" => "error",
-                "rawdata" => "Cobrança já paga — refund deve ser processado manualmente via conta Inter.",
-            ];
-        }
-
-        $response = seixastec_bancointer_buildApi($params)->cancelCollection($tx->codigo_solicitacao, "APEDIDODOCLIENTE");
-
-        BancoInterHelper::saveTransaction([
-            "invoice_id" => (int) $params["invoiceid"],
-            "codigo_solicitacao" => $tx->codigo_solicitacao,
-            "status" => "CANCELLED",
-            "raw_response" => json_encode($response, JSON_UNESCAPED_UNICODE),
-        ]);
-
-        return [
-            "status" => "success",
-            "rawdata" => $response,
-            "transid" => $tx->codigo_solicitacao,
-        ];
-    } catch (Throwable $e) {
-        return [
-            "status" => "error",
-            "rawdata" => $e->getMessage(),
-        ];
-    }
 }

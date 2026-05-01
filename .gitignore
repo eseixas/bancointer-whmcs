@@ -1,13 +1,18 @@
-<<<<<<< HEAD
 .agent/
+.agents/
 .claude/
+AGENTS.md
 .vscode/
 .idea/
 vendor/
 node_modules/
 *.log
 .env
-=======
+.env.*
+CLAUDE.md
+implementation_plan.md
+skills-lock.json
+
 # Certificados e chaves privadas
 *.key
 *.crt
@@ -15,22 +20,10 @@ node_modules/
 *.p12
 *.pfx
 
-# Dependências
-vendor/
-
-# Ambiente
-.env
-.env.*
-
-# IDEs
-.idea/
-.vscode/
+# IDEs e OS
 *.swp
-
-# OS
 .DS_Store
 Thumbs.db
 
 # Arquivos de diagnóstico locais
 inter_diag.php
->>>>>>> 89d66b5656e08a359328888bfd4058ebd3bf9dce

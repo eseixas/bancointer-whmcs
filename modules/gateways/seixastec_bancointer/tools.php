@@ -12,6 +12,8 @@ use WHMCS\Database\Capsule;
 require_once __DIR__ . "/../../../init.php";
 require_once __DIR__ . "/../seixastec_bancointer.php";
 
+const BI_RESULT_LIMIT = 100;
+
 if (empty($_SESSION["adminid"])) {
     http_response_code(403);
     exit("Admin login required.");
@@ -270,15 +272,9 @@ function bi_loadMetrics(): array
 function bi_loadExtractRows(array $filters): array
 {
     $query = Capsule::table(BancoInterHelper::TABLE)->orderBy("id", "desc");
+    bi_applyDateFilters($query, $filters, "created_at");
 
-    if (!empty($filters["start"])) {
-        $query->whereDate("created_at", ">=", $filters["start"]);
-    }
-    if (!empty($filters["end"])) {
-        $query->whereDate("created_at", "<=", $filters["end"]);
-    }
-
-    return $query->limit(100)->get()->all();
+    return $query->limit(BI_RESULT_LIMIT)->get()->all();
 }
 
 function bi_loadModuleLogs(array $filters): array
@@ -290,15 +286,9 @@ function bi_loadModuleLogs(array $filters): array
     $query = Capsule::table("tblmodulelog")
         ->where("module", BancoInterHelper::LOG_GATEWAY)
         ->orderBy("id", "desc");
+    bi_applyDateFilters($query, $filters, "date");
 
-    if (!empty($filters["start"])) {
-        $query->whereDate("date", ">=", $filters["start"]);
-    }
-    if (!empty($filters["end"])) {
-        $query->whereDate("date", "<=", $filters["end"]);
-    }
-
-    return $query->limit(100)->get()->all();
+    return $query->limit(BI_RESULT_LIMIT)->get()->all();
 }
 
 function bi_loadWebhookLogs(array $filters): array
@@ -306,15 +296,36 @@ function bi_loadWebhookLogs(array $filters): array
     $query = Capsule::table(BancoInterHelper::TABLE)
         ->whereNotNull("raw_response")
         ->orderBy("updated_at", "desc");
+    bi_applyDateFilters($query, $filters, "updated_at");
 
-    if (!empty($filters["start"])) {
-        $query->whereDate("updated_at", ">=", $filters["start"]);
+    return $query->limit(BI_RESULT_LIMIT)->get()->all();
+}
+
+function bi_applyDateFilters($query, array $filters, string $column): void
+{
+    $start = bi_normalizeDateFilter($filters["start"] ?? null);
+    $end = bi_normalizeDateFilter($filters["end"] ?? null);
+
+    if ($start !== null) {
+        $query->whereDate($column, ">=", $start);
     }
-    if (!empty($filters["end"])) {
-        $query->whereDate("updated_at", "<=", $filters["end"]);
+    if ($end !== null) {
+        $query->whereDate($column, "<=", $end);
+    }
+}
+
+function bi_normalizeDateFilter($value): ?string
+{
+    if (!is_string($value) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+        return null;
     }
 
-    return $query->limit(100)->get()->all();
+    $date = DateTimeImmutable::createFromFormat("!Y-m-d", $value);
+    if (!$date || $date->format("Y-m-d") !== $value) {
+        return null;
+    }
+
+    return $value;
 }
 
 function bi_loadTemplateRows(): array
@@ -419,6 +430,7 @@ function bi_renderExtractCard(array $rows, ?string $systemUrl = null): void
 {
     echo "<section class='bi-card'><div class='bi-card-title'>Extrato de boletos por periodo</div><div class='bi-card-body'>";
     echo bi_dateFilter("extract", "Pesquisar", $systemUrl);
+    echo bi_limitNotice($rows);
     echo bi_transactionsTable($rows, true);
     echo "</div></section>";
 }
@@ -454,6 +466,7 @@ function bi_renderLogsCard(array $rows, ?string $systemUrl = null): void
 {
     echo "<section class='bi-card'><div class='bi-card-title'>Logs do sistema</div><div class='bi-card-body'>";
     echo bi_dateFilter("logs", "Ver Logs", $systemUrl);
+    echo bi_limitNotice($rows);
     if (!$rows) {
         echo "<div class='bi-empty'>Nenhum log encontrado para o filtro selecionado.</div>";
     } else {
@@ -474,6 +487,7 @@ function bi_renderWebhookLogsCard(array $rows, string $csrfToken, ?string $syste
 {
     echo "<section class='bi-card'><div class='bi-card-title'>Logs Webhook</div><div class='bi-card-body'>";
     echo bi_dateFilter("webhook_logs", "Buscar", $systemUrl);
+    echo bi_limitNotice($rows);
     if (!$rows) {
         echo "<div class='bi-empty'>Nenhum retorno de webhook registrado.</div>";
     } else {
@@ -506,7 +520,16 @@ function bi_checkboxRow(string $label, string $name, bool $checked): void
 
 function bi_metric(string $label, string $value): void
 {
-    echo "<div class='bi-metric'><span>{$label}</span><strong>{$value}</strong></div>";
+    echo "<div class='bi-metric'><span>" . htmlspecialchars($label, ENT_QUOTES) . "</span><strong>" . htmlspecialchars($value, ENT_QUOTES) . "</strong></div>";
+}
+
+function bi_limitNotice(array $rows): string
+{
+    if (count($rows) < BI_RESULT_LIMIT) {
+        return "";
+    }
+
+    return "<div class='bi-note bi-note-warning'>Mostrando os ultimos " . BI_RESULT_LIMIT . " registros. Refine o filtro de datas.</div>";
 }
 
 function bi_dateFilter(string $view, string $buttonLabel, ?string $systemUrl = null): string
