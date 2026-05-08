@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.4.3] - 2026-05-08
 
 ### Changed
 - O PDF do boleto agora é anexado em criação e reminders de invoice somente quando a fatura usa o gateway Banco Inter.
