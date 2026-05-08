@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- O PDF do boleto agora é anexado em criação e reminders de invoice somente quando a fatura usa o gateway Banco Inter.
+- O hook `EmailPreSend` agora retorna o anexo em memória (`filename` + `data`), formato compatível com WHMCS.
+- A configuração `attach_pdf_always` foi neutralizada para impedir boleto Banco Inter em faturas de outros gateways.
+
 ## [1.4.2] - 2026-05-01
 
 ### Added

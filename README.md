@@ -72,6 +72,14 @@ administrativo do módulo.
 | Desconto (%, R$, dias) | Desconto para pagamento antecipado |
 | Campo Customizado de CPF/CNPJ | Dropdown com os custom fields de cliente; se vazio usa `tblclients.tax_id` |
 
+## Envio de boleto por e-mail
+
+O PDF do boleto é anexado aos e-mails `Invoice Created`, `Invoice Payment
+Reminder`, `First Payment Reminder`, `Second Payment Reminder`, `Third Payment
+Reminder` e `Overdue Invoice Notification` somente quando a fatura usa o gateway
+`seixastec_bancointer`. Faturas com outros métodos de pagamento não geram nem
+recebem boleto Banco Inter por e-mail.
+
 ## Registro do webhook
 
 No painel administrativo, acesse **Webhook** e clique em **Atualizar Webhook**.
@@ -118,6 +126,6 @@ o nome `seixastec_bancointer` com credenciais mascaradas.
   PHP-FPM precisa ter permissão de leitura no `.crt` e `.key`.
 - **"Invalid JSON payload" no webhook** — confirme se o webhook está
   registrado pela URL correta, incluindo o `?token=...` exibido no painel.
-- **PDF não anexa ao e-mail** — verifique o `logModuleCall` da tag
-  `hook.email_pdf`; cobranças criadas fora do fluxo WHMCS não têm registro
-  local e portanto não são anexadas.
+- **PDF não anexa ao e-mail** — confirme se a fatura usa o gateway
+  `seixastec_bancointer` e verifique o `logModuleCall` da tag
+  `hook.email_pdf`.

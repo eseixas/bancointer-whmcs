@@ -34,12 +34,7 @@ add_hook("InvoiceCreation", 1, function (array $vars) {
 
     $isBancoInter = strtolower((string) $invoice->paymentmethod) === "seixastec_bancointer";
     $autoGenerate = !empty($params["auto_generate"]) && $params["auto_generate"] !== "off";
-    $attachAlways = !empty($params["attach_pdf_always"]) && $params["attach_pdf_always"] !== "off";
-
-    // Gera a cobrança quando:
-    //   - método é Banco Inter e auto_generate está on (semântica original); OU
-    //   - attach_pdf_always está on (precisa ter cobrança para anexar PDF nos e-mails).
-    if (!(($isBancoInter && $autoGenerate) || $attachAlways)) {
+    if (!$isBancoInter || !$autoGenerate) {
         return;
     }
 

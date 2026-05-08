@@ -172,6 +172,7 @@ function bi_saveConfiguration(array $data): void
         "cert_path" => trim((string) ($data["cert_path"] ?? "")),
         "key_path" => trim((string) ($data["key_path"] ?? "")),
         "auto_generate" => !empty($data["auto_generate"]) ? "on" : "off",
+        "attach_pdf_always" => "off",
         "dias_baixa" => (string) max(1, (int) ($data["dias_baixa"] ?? 15)),
         "multa_pct" => (string) (float) ($data["multa_pct"] ?? 0),
         "juros_pct" => (string) (float) ($data["juros_pct"] ?? 0),
