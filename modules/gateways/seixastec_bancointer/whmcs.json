@@ -2,7 +2,7 @@
     "schema": "1.0",
     "type": "whmcs-gateways",
     "name": "seixastec_bancointer",
-    "version": "1.4.3",
+    "version": "1.4.4",
     "license": "MIT",
     "category": "payments",
     "description": {
@@ -12,7 +12,7 @@
         "features": [
             "Gera boleto registrados de forma automática.",
             "Possível adicionar taxa de juros e multa diretamente pelo gateway.",
-            "Retorno automática usando webhoook."
+            "Retorno automático usando webhook."
         ]
     },
     "logo": {

@@ -167,7 +167,8 @@ function bi_saveConfiguration(array $data): void
 {
     $fields = [
         "client_id" => trim((string) ($data["client_id"] ?? "")),
-        "client_secret" => trim((string) ($data["client_secret"] ?? "")),
+        // client_secret is intentionally excluded — it must be set via
+        // Setup → Payments → Banco Inter to ensure WHMCS encrypts it at rest.
         "conta_corrente" => trim((string) ($data["conta_corrente"] ?? "")),
         "cert_path" => trim((string) ($data["cert_path"] ?? "")),
         "key_path" => trim((string) ($data["key_path"] ?? "")),
@@ -328,7 +329,10 @@ function bi_renderConfigCard(array $params, array $customFieldOptions, string $c
     echo "<input type='hidden' name='action' value='save_config'>";
     echo "<div class='bi-form-intro bi-form-span'><h2>Credenciais e regras de cobranca</h2><p>Configure a API Banco Inter, certificados mTLS e regras financeiras usadas na emissao das cobrancas.</p></div>";
     bi_inputRow("Client ID", "client_id", (string) ($params["client_id"] ?? ""));
-    bi_inputRow("Client Secret", "client_secret", (string) ($params["client_secret"] ?? ""), "password");
+    echo "<label class='bi-form-label'>Client Secret</label><div class='bi-form-control'>";
+    echo "<input class='bi-readonly' readonly value='••••••••' title='Gerenciado pelo WHMCS'>";
+    echo "<small style='display:block;margin-top:4px;color:#888'>Para alterar o Client Secret use <strong>Setup &rarr; Payments &rarr; Banco Inter</strong>. Este painel nunca escreve o segredo para garantir que o WHMCS o armazene de forma criptografada.</small>";
+    echo "</div>";
     bi_inputRow("Conta Corrente", "conta_corrente", (string) ($params["conta_corrente"] ?? ""));
     bi_inputRow("Caminho Certificado", "cert_path", (string) ($params["cert_path"] ?? ""));
     bi_inputRow("Caminho Chave Privada", "key_path", (string) ($params["key_path"] ?? ""));

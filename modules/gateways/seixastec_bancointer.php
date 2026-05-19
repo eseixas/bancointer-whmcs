@@ -553,19 +553,23 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
 
         try {
             seixastec_bancointer_buildApi($params)->cancelCollection((string) $existing->codigo_solicitacao, "APEDIDODOCLIENTE");
+            BancoInterHelper::saveTransaction([
+                "id" => (int) $existing->id,
+                "invoice_id" => $invoiceId,
+                "codigo_solicitacao" => $existing->codigo_solicitacao,
+                "status" => "CANCELLED",
+            ]);
         } catch (Throwable $e) {
             BancoInterHelper::log("generate.cancel_previous_failed", [
                 "invoice_id" => $invoiceId,
                 "codigo_solicitacao" => $existing->codigo_solicitacao,
             ], $e->getMessage());
+            throw new RuntimeException(
+                "Não foi possível cancelar a cobrança anterior no Banco Inter. Tente novamente. Detalhe: " . $e->getMessage(),
+                0,
+                $e
+            );
         }
-
-        BancoInterHelper::saveTransaction([
-            "id" => (int) $existing->id,
-            "invoice_id" => $invoiceId,
-            "codigo_solicitacao" => $existing->codigo_solicitacao,
-            "status" => "CANCELLED",
-        ]);
     }
 
     $client = Capsule::table("tblclients")->where("id", $userId)->first();
@@ -619,7 +623,7 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
     $response = seixastec_bancointer_buildApi($params)->createCollection($payload);
 
     if (function_exists("logTransaction")) {
-        logTransaction($params["paymentmethod"] ?? "seixastec_bancointer", array_merge($payload, ["RESPONSE" => $response]), "Cobrança Gerada: " . ($response["codigoSolicitacao"] ?? "Desconhecido"));
+        logTransaction($params["name"] ?? "seixastec_bancointer", array_merge($payload, ["RESPONSE" => $response]), "Cobrança Gerada: " . ($response["codigoSolicitacao"] ?? "Desconhecido"));
     }
 
     $row = seixastec_bancointer_collectionRowFromResponse($invoiceId, $response, [
