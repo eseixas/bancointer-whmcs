@@ -72,6 +72,14 @@ administrativo do módulo.
 | Desconto (%, R$, dias) | Desconto para pagamento antecipado |
 | Campo Customizado de CPF/CNPJ | Dropdown com os custom fields de cliente; se vazio usa `tblclients.tax_id` |
 
+## Envio de boleto por e-mail
+
+O PDF do boleto é anexado aos e-mails `Invoice Created`, `Invoice Payment
+Reminder`, `First Payment Reminder`, `Second Payment Reminder`, `Third Payment
+Reminder` e `Overdue Invoice Notification` somente quando a fatura usa o gateway
+`seixastec_bancointer`. Faturas com outros métodos de pagamento não geram nem
+recebem boleto Banco Inter por e-mail.
+
 ## Registro do webhook
 
 No painel administrativo, acesse **Webhook** e clique em **Atualizar Webhook**.
@@ -97,6 +105,16 @@ URL local exibida pelo módulo e para remover o registro quando necessário.
    e marca a transação como `PAID`.
 4. Hook `DailyCronJob` cancela cobranças vencidas além de `dias_baixa`.
 
+## Refund PIX
+
+O módulo implementa o refund nativo do WHMCS para pagamentos PIX que tenham
+`endToEndId` salvo no registro local. O admin pode solicitar devolução total ou
+parcial pelo formulário padrão de refund da transação no WHMCS.
+
+Para usar esta função, a integração do Banco Inter precisa ter os escopos
+`pix.write` e `pix.read` liberados. Transações antigas sem `endToEndId` são
+recusadas com instrução para devolução manual pelo Banco Inter.
+
 ## Logs
 
 Todas as chamadas à API são registradas em **Utilities → Logs → Gateway Log** sob
@@ -108,6 +126,6 @@ o nome `seixastec_bancointer` com credenciais mascaradas.
   PHP-FPM precisa ter permissão de leitura no `.crt` e `.key`.
 - **"Invalid JSON payload" no webhook** — confirme se o webhook está
   registrado pela URL correta, incluindo o `?token=...` exibido no painel.
-- **PDF não anexa ao e-mail** — verifique o `logModuleCall` da tag
-  `hook.email_pdf`; cobranças criadas fora do fluxo WHMCS não têm registro
-  local e portanto não são anexadas.
+- **PDF não anexa ao e-mail** — confirme se a fatura usa o gateway
+  `seixastec_bancointer` e verifique o `logModuleCall` da tag
+  `hook.email_pdf`.

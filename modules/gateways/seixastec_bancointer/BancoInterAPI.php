@@ -16,7 +16,7 @@ class BancoInterAPI
 {
     public const BASE_URL = "https://cdpj.partners.bancointer.com.br";
 
-    private const SCOPES = "boleto-cobranca.read boleto-cobranca.write webhook-banking.read webhook-banking.write";
+    private const SCOPES = "boleto-cobranca.read boleto-cobranca.write webhook-banking.read webhook-banking.write pix.read pix.write";
     private const DEFAULT_TIMEOUT = 30;
 
     private string $clientId;
@@ -120,6 +120,34 @@ class BancoInterAPI
         }
 
         return $decoded;
+    }
+
+    /* -------------------------------------------------- pix */
+
+    public function refundPix(
+        string $endToEndId,
+        string $refundId,
+        float $amount,
+        string $description,
+        string $nature = "ORIGINAL"
+    ): array {
+        return $this->request(
+            "PUT",
+            "/pix/v2/pix/" . rawurlencode($endToEndId) . "/devolucao/" . rawurlencode($refundId),
+            [
+                "valor" => number_format($amount, 2, ".", ""),
+                "natureza" => $nature,
+                "descricao" => mb_substr($description, 0, 140),
+            ]
+        );
+    }
+
+    public function getPixRefund(string $endToEndId, string $refundId): array
+    {
+        return $this->request(
+            "GET",
+            "/pix/v2/pix/" . rawurlencode($endToEndId) . "/devolucao/" . rawurlencode($refundId)
+        );
     }
 
     /* -------------------------------------------------- webhook */

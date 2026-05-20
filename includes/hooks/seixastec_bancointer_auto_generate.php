@@ -34,12 +34,7 @@ add_hook("InvoiceCreation", 1, function (array $vars) {
 
     $isBancoInter = strtolower((string) $invoice->paymentmethod) === "seixastec_bancointer";
     $autoGenerate = !empty($params["auto_generate"]) && $params["auto_generate"] !== "off";
-    $attachAlways = !empty($params["attach_pdf_always"]) && $params["attach_pdf_always"] !== "off";
-
-    // Gera a cobrança quando:
-    //   - método é Banco Inter e auto_generate está on (semântica original); OU
-    //   - attach_pdf_always está on (precisa ter cobrança para anexar PDF nos e-mails).
-    if (!(($isBancoInter && $autoGenerate) || $attachAlways)) {
+    if (!$isBancoInter || !$autoGenerate) {
         return;
     }
 
@@ -90,6 +85,29 @@ add_hook("DailyCronJob", 1, function () {
 
     foreach ($candidates as $tx) {
         try {
+            // Verify live status before cancelling — a webhook may have failed to
+            // deliver a payment confirmation, leaving the local row as PENDING even
+            // though the cobrança was already settled at the bank.
+            $live = $api->getCollection($tx->codigo_solicitacao);
+            $liveStatus = strtoupper((string) ($live["situacao"] ?? ""));
+
+            // Sync any remote status change to the local row.
+            if ($liveStatus !== "") {
+                BancoInterHelper::saveTransaction([
+                    "invoice_id" => (int) $tx->invoice_id,
+                    "codigo_solicitacao" => $tx->codigo_solicitacao,
+                    "status" => $liveStatus,
+                ]);
+            }
+
+            // Skip if already paid or already cancelled on the bank side.
+            if (BancoInterHelper::isPaidStatus($liveStatus)) {
+                continue;
+            }
+            if (in_array($liveStatus, BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
+                continue;
+            }
+
             $api->cancelCollection($tx->codigo_solicitacao, "APEDIDODOCLIENTE");
             BancoInterHelper::saveTransaction([
                 "invoice_id" => (int) $tx->invoice_id,

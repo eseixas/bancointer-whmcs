@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.4] - 2026-05-19
+
+### Fixed
+- **BUG-3:** `generateForInvoice` agora só marca a cobrança anterior como `CANCELLED` após confirmação da API do Banco Inter. Em caso de falha no cancelamento, a geração é abortada com erro claro — antes a cobrança era marcada cancelada localmente mesmo que o banco ainda a mantivesse ativa, criando duplicatas cobráveis.
+- **BUG-4:** `DailyCronJob` consulta o status remoto (`getCollection`) antes de cancelar cada cobrança vencida. Cobranças pagas via webhook perdido não são mais marcadas erroneamente como `CANCELLED`; o status local é sincronizado com o retorno da API.
+- **BUG-5:** `logTransaction` dentro de `generateForInvoice` agora usa a chave correta `$params["name"]` (antes usava `$params["paymentmethod"]`, inexistente no array de gateway vars do WHMCS).
+- **BUG-9 (principal):** E-mails do tipo `Overdue Invoice Notification` (e variantes) voltam a receber o boleto PDF em anexo quando a cobrança ainda está ativa no Banco Inter.
+
+### Changed
+- Hook `EmailPreSend` classifica templates por substring case-insensitive em vez de lista estrita, cobrindo `Overdue Invoice Notification`, `Invoice Overdue Notice`, templates em português (`Notificação de Fatura Vencida`) e qualquer customização que preserve a palavra-chave.
+- Hook `EmailPreSend` emite telemetria estruturada em todos os caminhos (`attached`, `skipped_paid`, `skipped_cancelled`, `skipped_no_active_tx`, `skipped_other_gateway`, `mint_failed`, `api_error`) visível em WHMCS → Utilities → Logs → Gateway Log.
+- Boleto PDF nunca é anexado quando a cobrança está em status `PAID` ou `CANCELLED` / `EXPIRED`.
+- Geração on-the-fly de cobrança no hook de e-mail ocorre apenas para o template `invoice_created`; reminders e overdues não disparam geração nova (evita cobrança com vencimento incorreto em e-mail tardio).
+- Admin panel (`tools.php`) deixou de gravar `client_secret` via formulário (Option C de segurança). O campo exibe placeholder `••••••••` com instrução para usar Setup → Payments → Banco Inter para alterações de credencial.
+
+### Security
+- **BUG-2:** `client_secret` não é mais gravado em texto plano via painel administrativo customizado. Alterações de credencial devem ser feitas pela página nativa de configuração de gateway do WHMCS, que garante armazenamento criptografado.
+
+### Maintenance
+- Versão do addon `seixastec_bancointer_admin` atualizada de `1.4.2` para `1.4.4`.
+- `whmcs.json`: corrigido typo `webhoook` → `webhook` e acentuação `automática` em features.
+
+## [1.4.3] - 2026-05-08
+
+### Changed
+- O PDF do boleto agora é anexado em criação e reminders de invoice somente quando a fatura usa o gateway Banco Inter.
+- O hook `EmailPreSend` agora retorna o anexo em memória (`filename` + `data`), formato compatível com WHMCS.
+- A configuração `attach_pdf_always` foi neutralizada para impedir boleto Banco Inter em faturas de outros gateways.
+
+## [1.4.2] - 2026-05-01
+
+### Added
+- Implementado refund PIX nativo do WHMCS para pagamentos Banco Inter com `endToEndId`, incluindo devolução total/parcial, chamada `PUT /pix/v2/pix/{e2eId}/devolucao/{id}` e persistência do último refund no registro local.
+- Adicionados escopos OAuth `pix.read` e `pix.write` para suportar devoluções PIX.
+
 ## [1.4.1] - 2026-05-01
 
 ### Added

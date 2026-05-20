@@ -103,11 +103,6 @@ function seixastec_bancointer_config(): array
             "Type" => "yesno",
             "Description" => "Emite a cobrança assim que a fatura é criada.",
         ],
-        "attach_pdf_always" => [
-            "FriendlyName" => "Anexar boleto em todas as faturas",
-            "Type" => "yesno",
-            "Description" => "Quando ativado, anexa o PDF do boleto a TODAS as faturas (não apenas as com método Banco Inter), gerando a cobrança automaticamente se necessário.",
-        ],
         "dias_baixa" => [
             "FriendlyName" => "Dias para Baixa Automática",
             "Type" => "text",
@@ -341,6 +336,150 @@ HTML
 HTML;
 }
 
+function seixastec_bancointer_refund(array $params): array
+{
+    $invoiceId = (int) ($params["invoiceid"] ?? 0);
+    $transId = trim((string) ($params["transid"] ?? ""));
+    $amount = round((float) ($params["amount"] ?? 0), 2);
+
+    try {
+        if ($invoiceId <= 0) {
+            return seixastec_bancointer_refundError("Fatura inválida para refund.", [
+                "invoiceid" => $params["invoiceid"] ?? null,
+            ]);
+        }
+
+        if ($amount <= 0) {
+            return seixastec_bancointer_refundError("Valor de refund inválido.", [
+                "invoiceid" => $invoiceId,
+                "amount" => $params["amount"] ?? null,
+            ]);
+        }
+
+        $tx = BancoInterHelper::findByInvoice($invoiceId);
+        if ($transId !== "") {
+            $txByTransId = BancoInterHelper::findByTxid($transId);
+            if ($txByTransId && (int) $txByTransId->invoice_id === $invoiceId) {
+                $tx = $txByTransId;
+            }
+        }
+
+        if (!$tx) {
+            return seixastec_bancointer_refundError("Transação Banco Inter não encontrada para esta fatura.", [
+                "invoiceid" => $invoiceId,
+                "transid" => $transId,
+            ]);
+        }
+
+        $isPaid = BancoInterHelper::isPaidStatus($tx->status ?? null)
+            || !empty($tx->paid_at)
+            || (float) ($tx->paid_amount ?? 0) > 0;
+        if (!$isPaid) {
+            return seixastec_bancointer_refundError("A cobrança local ainda não está marcada como paga.", [
+                "invoiceid" => $invoiceId,
+                "transaction_row_id" => $tx->id ?? null,
+                "status" => $tx->status ?? null,
+            ]);
+        }
+
+        $endToEndId = trim((string) ($tx->e2e_id ?? ""));
+        if ($endToEndId === "") {
+            return seixastec_bancointer_refundError(
+                "Refund automático disponível apenas para PIX com endToEndId salvo. Faça a devolução manual pelo Banco Inter.",
+                [
+                    "invoiceid" => $invoiceId,
+                    "transaction_row_id" => $tx->id ?? null,
+                    "transid" => $transId,
+                    "txid" => $tx->txid ?? null,
+                    "codigo_solicitacao" => $tx->codigo_solicitacao ?? null,
+                ]
+            );
+        }
+
+        $paidAmount = (float) ($tx->paid_amount ?? 0);
+        if ($paidAmount <= 0) {
+            $paidAmount = (float) ($tx->amount ?? 0);
+        }
+        if ($paidAmount > 0 && $amount > $paidAmount + 0.01) {
+            return seixastec_bancointer_refundError("Valor de refund maior que o valor pago localmente.", [
+                "invoiceid" => $invoiceId,
+                "amount" => $amount,
+                "paid_amount" => $paidAmount,
+            ]);
+        }
+
+        $refundId = seixastec_bancointer_refundId($invoiceId, $transId);
+        $description = "Refund WHMCS invoice #{$invoiceId}";
+        $response = seixastec_bancointer_buildApi($params)->refundPix(
+            $endToEndId,
+            $refundId,
+            $amount,
+            $description
+        );
+
+        $refundTransId = (string) ($response["rtrId"] ?? ($response["id"] ?? $refundId));
+        BancoInterHelper::saveTransaction([
+            "id" => (int) $tx->id,
+            "invoice_id" => $invoiceId,
+            "codigo_solicitacao" => $tx->codigo_solicitacao ?? null,
+            "refund_id" => $refundId,
+            "refund_status" => strtoupper((string) ($response["status"] ?? "REQUESTED")),
+            "refund_amount" => $amount,
+            "refund_raw_response" => json_encode($response, JSON_UNESCAPED_UNICODE),
+            "refunded_at" => date("Y-m-d H:i:s"),
+        ]);
+
+        BancoInterHelper::log("refund.pix.success", [
+            "invoiceid" => $invoiceId,
+            "transid" => $transId,
+            "e2e_id" => $endToEndId,
+            "refund_id" => $refundId,
+            "amount" => $amount,
+        ], $response);
+
+        return [
+            "status" => "success",
+            "rawdata" => $response,
+            "transid" => $refundTransId,
+            "fees" => 0,
+        ];
+    } catch (Throwable $e) {
+        BancoInterHelper::log("refund.pix.error", [
+            "invoiceid" => $invoiceId,
+            "transid" => $transId,
+            "amount" => $amount,
+        ], $e->getMessage());
+
+        return [
+            "status" => "error",
+            "declinereason" => $e->getMessage(),
+            "rawdata" => [
+                "invoiceid" => $invoiceId,
+                "transid" => $transId,
+                "amount" => $amount,
+                "error" => $e->getMessage(),
+            ],
+        ];
+    }
+}
+
+function seixastec_bancointer_refundError(string $message, array $rawData = []): array
+{
+    BancoInterHelper::log("refund.pix.rejected", $rawData, $message);
+
+    return [
+        "status" => "error",
+        "declinereason" => $message,
+        "rawdata" => array_merge($rawData, ["error" => $message]),
+    ];
+}
+
+function seixastec_bancointer_refundId(int $invoiceId, string $transId): string
+{
+    $hash = substr(hash("sha256", $invoiceId . "|" . $transId . "|" . microtime(true) . "|" . random_int(1000, 9999)), 0, 16);
+    return substr("whmcs" . $invoiceId . $hash, 0, 35);
+}
+
 /* -------------------------------------------------- shared helpers
  * Exposed as top-level functions because WHMCS loads gateway modules with
  * require_once; every caller (generate.php, tools.php, callback, hooks)
@@ -414,19 +553,23 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
 
         try {
             seixastec_bancointer_buildApi($params)->cancelCollection((string) $existing->codigo_solicitacao, "APEDIDODOCLIENTE");
+            BancoInterHelper::saveTransaction([
+                "id" => (int) $existing->id,
+                "invoice_id" => $invoiceId,
+                "codigo_solicitacao" => $existing->codigo_solicitacao,
+                "status" => "CANCELLED",
+            ]);
         } catch (Throwable $e) {
             BancoInterHelper::log("generate.cancel_previous_failed", [
                 "invoice_id" => $invoiceId,
                 "codigo_solicitacao" => $existing->codigo_solicitacao,
             ], $e->getMessage());
+            throw new RuntimeException(
+                "Não foi possível cancelar a cobrança anterior no Banco Inter. Tente novamente. Detalhe: " . $e->getMessage(),
+                0,
+                $e
+            );
         }
-
-        BancoInterHelper::saveTransaction([
-            "id" => (int) $existing->id,
-            "invoice_id" => $invoiceId,
-            "codigo_solicitacao" => $existing->codigo_solicitacao,
-            "status" => "CANCELLED",
-        ]);
     }
 
     $client = Capsule::table("tblclients")->where("id", $userId)->first();
@@ -480,7 +623,7 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
     $response = seixastec_bancointer_buildApi($params)->createCollection($payload);
 
     if (function_exists("logTransaction")) {
-        logTransaction($params["paymentmethod"] ?? "seixastec_bancointer", array_merge($payload, ["RESPONSE" => $response]), "Cobrança Gerada: " . ($response["codigoSolicitacao"] ?? "Desconhecido"));
+        logTransaction($params["name"] ?? "seixastec_bancointer", array_merge($payload, ["RESPONSE" => $response]), "Cobrança Gerada: " . ($response["codigoSolicitacao"] ?? "Desconhecido"));
     }
 
     $row = seixastec_bancointer_collectionRowFromResponse($invoiceId, $response, [
