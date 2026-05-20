@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.5] - 2026-05-20
+
+### Fixed
+- Adicionado suporte ao template `Invoice Modified` (e variantes como `Fatura Alterada`) no hook `EmailPreSend` para anexar o boleto PDF do Banco Inter ao e-mail enviado ao cliente após alterações na fatura.
+
+### Maintenance
+- Versão do addon `seixastec_bancointer_admin` e gateway incrementadas para `1.4.5`.
+
 ## [1.4.4] - 2026-05-19
 
 ### Fixed
