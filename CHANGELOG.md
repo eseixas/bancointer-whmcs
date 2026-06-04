@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.4.9] - 2026-05-?? 
+## [1.4.9] - 2026-06-03 
 
 ### Fixed
 - **Dropdown "Origem do CPF/CNPJ" com "1" perdido**: corrigido o builder da string `Options` para o campo `dropdown` no config nativo do gateway. Agora usa formato `val=label` (ex: `1=[1] CPF/CNPJ`) unido por vírgulas. Isso impede que o parser do WHMCS crie opções avulsas como o número "1" separado do label formatado. Inclui opção de fallback "usar Tax ID padrão" + os campos custom reais no formato `[id] Nome`. O valor salvo continua sendo o ID numérico (ou vazio para fallback).
