@@ -68,7 +68,7 @@ administrativo do módulo.
 | Conta Corrente | Obrigatório apenas em aplicações multi-conta |
 | Gerar Boleto/PIX automaticamente | Dispara emissão ao criar a fatura (hook InvoiceCreation) |
 | Dias para Baixa Automática | Dias após o vencimento para cancelar no banco (padrão: 15) |
-| Multa (%) / Juros ao Mês (%) | Regras pós-vencimento |
+| Multa (%) / Juros ao Mês (%) | Regras pós-vencimento (TAXAMENSAL; prorrateado pelo banco; simulador no painel admin para visualizar o efeito) |
 | Desconto (%, R$, dias) | Desconto para pagamento antecipado |
 | Campo Customizado de CPF/CNPJ | Dropdown com os custom fields de cliente; se vazio usa `tblclients.tax_id` |
 

@@ -45,23 +45,22 @@ function seixastec_bancointer_config(): array
         // Ignore reduced-schema environments during bootstrap.
     }
 
-    $systemUrl = BancoInterHelper::systemUrl();
-    $adminUrl = $systemUrl ? ($systemUrl . "/modules/gateways/seixastec_bancointer/admin.php?view=config") : "";
-    $adminHtml = $adminUrl
-        ? sprintf(
-            '<div style="line-height:1.8">' .
-              '<div style="margin:12px 0 18px;padding:14px 16px;background:#fff5d8;border:1px solid #f0d58a;border-radius:4px;color:#8a6a00">' .
-              '<strong>INFO:</strong> o painel abaixo centraliza configurações, webhook, extrato, métricas e logs.' .
-              '</div>' .
-              '<div style="margin:0 0 16px">' .
-              '<a class="btn btn-primary" href="%s" target="_blank">Abrir Painel Administrativo em Nova Aba</a>' .
-              '</div>' .
-              '<iframe src="%s" style="width:100%%;min-height:1800px;border:1px solid #dcdcdc;border-radius:4px;background:#fff"></iframe>' .
-            '</div>',
-            htmlspecialchars($adminUrl, ENT_QUOTES),
-            htmlspecialchars($adminUrl, ENT_QUOTES)
-        )
-        : "<em>Configure System URL em WHMCS ➔ Configurações Gerais.</em>";
+    // Rich tools panel (webhook mgmt, extrato, métricas, logs). Injected via Type=none so it appears after the rules.
+    // Uses ?minimal=1 + named iframe + constrained inner layout (see tools.php) so that even "Logs Webhook" (with long payloads) stays contained with visible sidebar for navigation. Fixed height on iframe prevents it from dominating the admin page.
+    $rawPanelUrl = BancoInterHelper::adminPanelUrl("webhook");
+    $embedUrl = $rawPanelUrl . (strpos($rawPanelUrl, '?') !== false ? '&' : '?') . 'minimal=1';
+    $safeEmbed = htmlspecialchars($embedUrl, ENT_QUOTES);
+
+    $richPanel = '<div style="margin:16px 0 8px;padding:0;border:1px solid #e6d9a8;border-radius:5px;overflow:hidden;">'
+        . '<div style="background:#fff8e1;padding:10px 14px;border-bottom:1px solid #f0d58a;color:#664e00;font-size:13px;line-height:1.45;">'
+        . '<strong>INFO:</strong> Regras operacionais (multa, juros, descontos, geração automática, dias para baixa, origem do CPF/CNPJ) são configuradas nos campos acima e salvas normalmente. '
+        . 'Abaixo estão as ferramentas administrativas (webhook, extrato, métricas, logs).'
+        . '</div>'
+        . '<iframe name="bi-panel-iframe" src="' . $safeEmbed . '" style="width:100%;height:680px;border:0;border-top:1px solid #e6d9a8;background:#fff;display:block;"></iframe>'
+        . '<div style="background:#fafafa;padding:6px 14px;font-size:11px;color:#666;border-top:1px solid #eee;">'
+        . 'Dica: configure o <strong>System URL</strong> corretamente em Setup → General Settings para links absolutos perfeitos. O iframe usa fallbacks automáticos.'
+        . '</div>'
+        . '</div>';
 
     return [
         "FriendlyName" => [
@@ -99,62 +98,72 @@ function seixastec_bancointer_config(): array
             "Description" => "Caminho absoluto da chave privada do certificado.",
         ],
         "auto_generate" => [
-            "FriendlyName" => "Gerar Boleto/PIX automaticamente",
+            "FriendlyName" => "Gerar automaticamente",
             "Type" => "yesno",
-            "Description" => "Emite a cobrança assim que a fatura é criada.",
+            "Description" => "Se ativado, tenta gerar o boleto/PIX automaticamente quando a fatura é criada (InvoiceCreation) ou ao visualizar a fatura.",
         ],
         "dias_baixa" => [
-            "FriendlyName" => "Dias para Baixa Automática",
+            "FriendlyName" => "Dias para Baixa",
             "Type" => "text",
             "Size" => "5",
-            "Default" => "15",
-            "Description" => "Dias após o vencimento para cancelamento automático no banco.",
+            "Description" => "Dias após vencimento para enviar instrução de baixa automática ao banco (padrão 15).",
         ],
         "multa_pct" => [
             "FriendlyName" => "Multa (%)",
             "Type" => "text",
-            "Size" => "6",
-            "Default" => "2",
-            "Description" => "Percentual de multa aplicado após o vencimento.",
+            "Size" => "8",
+            "Description" => "Percentual de multa cobrado uma única vez após o vencimento. Ex: 2 para 2%.",
         ],
         "juros_pct" => [
             "FriendlyName" => "Juros ao Mês (%)",
             "Type" => "text",
-            "Size" => "6",
-            "Default" => "1",
-            "Description" => "Taxa mensal de juros moratórios.",
+            "Size" => "8",
+            "Description" => "Taxa de juros mensal (código TAXAMENSAL no Banco Inter). O banco faz o prorrateio por dia. Ex: 1 para 1% a.m. (deixe 0 se não usar juros).",
         ],
         "desconto_pct" => [
-            "FriendlyName" => "Desconto para pagamento antecipado (%)",
+            "FriendlyName" => "Desconto (%)",
             "Type" => "text",
-            "Size" => "6",
-            "Default" => "0",
-            "Description" => "Percentual de desconto concedido para pagamento antecipado.",
+            "Size" => "8",
+            "Description" => "Desconto percentual se pago até 'Dias do Desconto' antes do vencimento.",
         ],
         "desconto_fixo" => [
-            "FriendlyName" => "Desconto fixo (R$)",
+            "FriendlyName" => "Desconto Fixo (R$)",
             "Type" => "text",
-            "Size" => "10",
-            "Default" => "0",
-            "Description" => "Alternativa ao percentual para desconto antecipado.",
+            "Size" => "8",
+            "Description" => "Desconto em valor fixo (use um ou outro com o %).",
         ],
         "desconto_dias" => [
-            "FriendlyName" => "Dias antes do vencimento p/ desconto",
+            "FriendlyName" => "Dias do Desconto",
             "Type" => "text",
-            "Size" => "4",
-            "Default" => "0",
-            "Description" => "Janela de antecipação para o desconto.",
+            "Size" => "5",
+            "Description" => "Quantos dias antes do vencimento o desconto é válido (0 = desativado).",
         ],
         "cpf_cnpj_field" => [
-            "FriendlyName" => "Campo Customizado de CPF/CNPJ",
+            "FriendlyName" => "Origem do CPF/CNPJ",
             "Type" => "dropdown",
-            "Options" => $customFieldOptions,
-            "Description" => "Se vazio, usa o Tax ID padrão do cliente.",
+            "Options" => (function($opts){
+                $pairs = [];
+                foreach ($opts as $id => $label) {
+                    $clean = str_replace([",","="], " ", (string)$label);
+                    $val = (string)$id;
+                    if ($val === '') {
+                        // Default option: value empty string, nice label. Using = separator so WHMCS treats as one spec " =Usar..."
+                        $pairs[] = "=" . $clean;
+                    } else {
+                        // Real custom field: "1=[1] CPF/CNPJ"
+                        $pairs[] = $val . "=" . $clean;
+                    }
+                }
+                return implode(",", $pairs);
+            })($customFieldOptions),
+            "Description" => "Selecione o custom field de cliente que contém o CPF/CNPJ do pagador. Se a opção 'usar Tax ID padrão' estiver selecionada (ou nenhum valor), usa o Tax ID do cliente no WHMCS.",
         ],
-        "admin_panel_embed" => [
-            "FriendlyName" => "Painel Administrativo",
-            "Type" => "System",
-            "Value" => $adminHtml,
+        // Tools panel (webhook, extrato, métricas, logs) — agora separado das regras operacionais (que estão nos campos acima).
+        // Type=none força a exibição logo após as regras. Usa minimal=1 para não repetir header dentro do iframe.
+        "admin_panel" => [
+            "FriendlyName" => "",
+            "Type" => "none",
+            "Description" => $richPanel,
         ],
     ];
 }
@@ -257,10 +266,14 @@ HTML;
     $due = !empty($tx->due_date) ? date("d/m/Y", strtotime((string) $tx->due_date)) : "—";
 
     if (!$hasPix && !$hasLinhaDigitavel) {
+        $overdueNote2 = (!empty($tx->due_date) && strtotime((string) $tx->due_date) < time() && !BancoInterHelper::isPaidStatus($tx->status ?? null))
+            ? '<div style="font-size:11px;color:#8a6a00;margin-top:4px">Após o vencimento incidem multa e juros conforme regras do gateway (valor atualizado consta no PDF do boleto).</div>'
+            : '';
         return <<<HTML
 <div class="bancointer-pay" style="border:1px solid #e6e6e6;border-radius:8px;padding:16px;margin-top:16px">
     <h4 style="margin-top:0">Banco Inter Boleto e PIX</h4>
     <p><strong>Status:</strong> {$status} · <strong>Vencimento:</strong> {$due}</p>
+    {$overdueNote2}
     <div style="padding:12px 14px;border:1px solid #f0d58a;background:#fff8dc;border-radius:4px;color:#8a6a00">
         Cobrança emitida no Banco Inter. Os dados de pagamento ainda estão em processamento; recarregue a fatura em instantes.
     </div>
@@ -320,10 +333,18 @@ HTML
 HTML
         : "";
 
+    // Small note when past due so clients understand that the boleto PDF may show a higher amount
+    // due to the configured multa/juros (the authoritative calc lives at the bank).
+    $overdueNote = "";
+    if (!empty($tx->due_date) && strtotime((string) $tx->due_date) < time() && !BancoInterHelper::isPaidStatus($tx->status ?? null)) {
+        $overdueNote = '<div style="font-size:11px;color:#8a6a00;margin-top:4px">Após o vencimento incidem multa e juros conforme regras do gateway (valor atualizado consta no PDF do boleto).</div>';
+    }
+
     return <<<HTML
 <div class="bancointer-pay" style="border:1px solid #e6e6e6;border-radius:8px;padding:16px;margin-top:16px">
     <h4 style="margin-top:0">Banco Inter Boleto e PIX</h4>
     <p><strong>Status:</strong> {$status} · <strong>Vencimento:</strong> {$due}</p>
+    {$overdueNote}
 
     <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
         {$qrBlock}
@@ -620,6 +641,12 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         $payload = array_merge($payload, $chargeOpts);
     }
 
+    // Snapshot the exact multa/juros rules that produced the chargeOpts above.
+    // These are persisted so we have an audit trail of what was configured at emission time
+    // (independent of later gateway setting changes) and for admin visibility / simulator parity.
+    $snapshotMulta = (float) ($params["multa_pct"] ?? 0);
+    $snapshotJuros = (float) ($params["juros_pct"] ?? 0);
+
     $response = seixastec_bancointer_buildApi($params)->createCollection($payload);
 
     if (function_exists("logTransaction")) {
@@ -631,6 +658,9 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         "amount" => round($amount, 2),
         "due_date" => $dueDate,
         "raw_request" => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        "multa_taxa" => $snapshotMulta > 0 ? $snapshotMulta : null,
+        "mora_taxa" => $snapshotJuros > 0 ? $snapshotJuros : null,
+        "mora_codigo" => $snapshotJuros > 0 ? "TAXAMENSAL" : null,
     ]);
 
     BancoInterHelper::saveTransaction($row);

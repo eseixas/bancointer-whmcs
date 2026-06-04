@@ -51,6 +51,14 @@ function seixastec_bancointer_classifyEmail(string $messageName): ?string
     }
 
     if (
+        str_contains($lower, "modified") ||
+        str_contains($lower, "alterad") ||
+        str_contains($lower, "modificad")
+    ) {
+        return "invoice_modified";
+    }
+
+    if (
         (str_contains($lower, "invoice") && str_contains($lower, "creat")) ||
         (str_contains($lower, "fatura") && str_contains($lower, "cri"))
     ) {
@@ -128,9 +136,9 @@ add_hook("EmailPreSend", 1, function (array $vars) {
 
     // No active cobrança exists yet.
     if (!$tx || empty($tx->codigo_solicitacao)) {
-        // Only invoice_created emails trigger on-the-fly generation.
+        // Only invoice_created and invoice_modified emails trigger on-the-fly generation.
         // For reminders and overdue we never create a new cobrança mid-email.
-        if ($classification !== "invoice_created") {
+        if ($classification !== "invoice_created" && $classification !== "invoice_modified") {
             BancoInterHelper::log(
                 "hook.email_pdf",
                 ["invoiceid" => $relid, "messagename" => $messageName, "classification" => $classification],

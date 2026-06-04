@@ -2,7 +2,7 @@
     "schema": "1.0",
     "type": "whmcs-gateways",
     "name": "seixastec_bancointer",
-    "version": "1.4.4",
+    "version": "1.4.9",
     "license": "MIT",
     "category": "payments",
     "description": {

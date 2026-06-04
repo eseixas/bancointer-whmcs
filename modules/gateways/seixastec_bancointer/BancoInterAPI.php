@@ -3,7 +3,9 @@
  * Banco Inter API v3 client.
  *
  * - OAuth2 client credentials + mTLS (cert paths must sit outside public_html).
- * - Caches access tokens in-process for the life of the request.
+ * - Caches access tokens in-process for the current request + persistently in
+ *   tblconfiguration across requests (to avoid frequent calls to /oauth/v2/token
+ *   and resulting 429 rate limit errors).
  * - Surfaces cobrança v3 endpoints (create, get, cancel, PDF) and webhook
  *   management, returning decoded payloads and throwing on transport errors.
  */
@@ -44,10 +46,21 @@ class BancoInterAPI
 
     public function getAccessToken(): string
     {
+        // 1. In-memory (current request) cache
         if ($this->tokenCache && $this->tokenCache["expires_at"] > time() + 30) {
             return $this->tokenCache["access_token"];
         }
 
+        // 2. Persistent cross-request cache (DB) — critical to avoid hammering
+        // the /oauth/v2/token endpoint on every admin page load / cron / invoice view,
+        // which easily triggers 429 Too Many Requests from Banco Inter.
+        $cached = BancoInterHelper::getCachedOAuthToken();
+        if ($cached) {
+            $this->tokenCache = $cached;
+            return $cached["access_token"];
+        }
+
+        // 3. Fetch new token
         $response = $this->request("POST", "/oauth/v2/token", [
             "grant_type" => "client_credentials",
             "client_id" => $this->clientId,
@@ -65,6 +78,12 @@ class BancoInterAPI
             "access_token" => $response["access_token"],
             "expires_at" => time() + (int) ($response["expires_in"] ?? 3500),
         ];
+
+        // Persist so the next request (new PHP process) can reuse it
+        BancoInterHelper::storeOAuthToken(
+            $this->tokenCache["access_token"],
+            $this->tokenCache["expires_at"]
+        );
 
         return $this->tokenCache["access_token"];
     }

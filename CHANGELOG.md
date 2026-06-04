@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.9] - 2026-05-?? 
+
+### Fixed
+- **Dropdown "Origem do CPF/CNPJ" com "1" perdido**: corrigido o builder da string `Options` para o campo `dropdown` no config nativo do gateway. Agora usa formato `val=label` (ex: `1=[1] CPF/CNPJ`) unido por vírgulas. Isso impede que o parser do WHMCS crie opções avulsas como o número "1" separado do label formatado. Inclui opção de fallback "usar Tax ID padrão" + os campos custom reais no formato `[id] Nome`. O valor salvo continua sendo o ID numérico (ou vazio para fallback).
+- **Logs Webhook ocupando o frame no embed**: reforçado o modo `minimal=1` (usado quando o painel é embutido na página de config do gateway):
+  - CSS dedicado para forçar `height: 100%` no container do iframe, sidebar lateral estreita fixa (165px, sem stacking em telas pequenas), e `.bi-main` com `overflow: auto` (só o conteúdo rola; sidebar de navegação fica sempre visível).
+  - Altura do `<iframe>` reduzida para 680px (fixa) para não dominar a página de config do WHMCS.
+  - No `bi_renderWebhookLogsCard`: payload do `<pre>` truncado para ~180 chars + `…` + `title` com texto completo (evita expansão por JSON longo).
+- Removido o botão "Abrir Painel Administrativo em Nova Aba" do embed rico na página nativa (conforme solicitado).
+- Removido completamente o "Simulador rápido (multa + juros)" da página de configuração nativa (conforme solicitado). Somente o valor da multa é necessário/ mantido como campo principal. O campo de juros permanece (com nota para deixar 0 se não usado); o simulador que misturava os dois foi retirado.
+
+### Changed
+- Versão atualizada para 1.4.9 em `whmcs.json` e no addon.
+- Addon continua sendo **opcional** (atalho de menu). O principal é tudo dentro de Setup > Payments > Payment Gateways > Banco Inter (credenciais + regras operacionais + ferramentas no iframe embutido).
+- Melhoria na navegação do iframe embutido: `<iframe name="bi-panel-iframe">` + `target="bi-panel-iframe"` em todos os links da sidebar e forms (filtros + ações). Garante que cliques/submits (incluindo em Logs Webhook) recarreguem dentro do mesmo iframe.
+
+## [1.4.8] - Previous
+
+### Fixed
+- Dropdown "Origem do CPF/CNPJ": corrigido o builder de "Options" para WHMCS. Agora lista **somente** os custom fields reais no formato "[id] Nome" (ex: "[1] CPF/CNPJ"). Removida a entrada em branco/"Usar Tax ID do Cliente" do dropdown (o comportamento de fallback para o Tax ID do cliente continua quando nada é selecionado).
+- Removido completamente o botão "Abrir Painel Administrativo em Nova Aba" do embed na página nativa do gateway (conforme solicitado).
+- Navegação em "Logs Webhook" (e todas as views do painel embutido): adicionado `name="bi-panel-iframe"` no `<iframe>` + `target="bi-panel-iframe"` em todos os `<a>` da sidebar e em todos os `<form>` (filtros de data GET + ações POST como register/delete/rotate/clear). Isso garante que cliques e submits dentro do iframe (incluindo após ir para Logs Webhook e usar "Buscar") sempre recarreguem **dentro do mesmo iframe**, mantendo a sidebar visível o tempo todo e eliminando a necessidade de "voltar" no navegador. O modo minimal continua removendo o header repetido para não "ocupar a tela toda".
+
+- Removido o "Simulador rápido (multa + juros)" da página nativa de configuração do gateway (conforme solicitado). Somente o valor da multa é mantido como campo editável principal (juros permanece como campo opcional com nota para deixar 0 se não utilizado; o simulador que misturava os dois foi retirado por completo).
+- Logs Webhook no embed: agora com CSS dedicado no modo minimal para forçar altura 100% do iframe (html/body/.bi-admin), sidebar lateral estreita fixa (sem colapso em larguras pequenas), e .bi-main com overflow:auto (scroll interno). Altura do iframe reduzida para 680px fixa. Payload no pre truncado agressivamente (180 chars + tooltip). Isso resolve o problema de "ocupar o frame todo" mantendo a navegação lateral sempre acessível sem recarregar a página pai.
+
+(Older entries below - see full history for 1.4.6/1.4.7 consolidation, juros transparency, OAuth 429 cache, etc.)
+
+## [1.4.5] - 2026-05-20
+
+### Fixed
+- Adicionado suporte ao template `Invoice Modified` (e variantes como `Fatura Alterada`) no hook `EmailPreSend` para anexar o boleto PDF do Banco Inter ao e-mail enviado ao cliente após alterações na fatura.
+
+### Maintenance
+- Versão do addon `seixastec_bancointer_admin` e gateway incrementadas para `1.4.5`.
+
 ## [1.4.4] - 2026-05-19
 
 ### Fixed
