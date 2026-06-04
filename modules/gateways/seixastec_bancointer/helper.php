@@ -22,6 +22,10 @@ class BancoInterHelper
     public const TERMINAL_CANCELLED_STATUSES = ["CANCELLED", "EXPIRED", "CANCELADO", "EXPIRADO"];
     public const TERMINAL_PAID_STATUSES = ["PAID", "RECEBIDO", "MARCADO_RECEBIDO"];
 
+    // Persistent cache keys for OAuth access tokens (to avoid excessive calls to /oauth/v2/token and 429 rate limits).
+    private const OAUTH_TOKEN_SETTING = "seixastec_bancointer_oauth_token";
+    private const OAUTH_EXPIRES_SETTING = "seixastec_bancointer_oauth_expires_at";
+
     /**
      * Create the transaction-tracking table on first use. Safe to call every
      * request — uses INFORMATION_SCHEMA, not CREATE TABLE IF NOT EXISTS, so
@@ -31,6 +35,7 @@ class BancoInterHelper
     {
         if (Capsule::schema()->hasTable(self::TABLE)) {
             self::ensureRefundColumns();
+            self::ensureJurosMoraColumns();
             return;
         }
 
@@ -51,6 +56,15 @@ class BancoInterHelper
             $table->decimal("paid_amount", 12, 2)->nullable();
             $table->date("due_date")->nullable();
             $table->dateTime("paid_at")->nullable();
+
+            // Juros / multa rules snapshot (from gateway config at creation time) + received breakdown (populated on payment).
+            $table->decimal("multa_taxa", 8, 4)->nullable();
+            $table->decimal("mora_taxa", 8, 4)->nullable();
+            $table->string("mora_codigo", 20)->nullable();
+            $table->decimal("paid_juros", 12, 2)->nullable();
+            $table->decimal("paid_multa", 12, 2)->nullable();
+            $table->decimal("paid_desconto", 12, 2)->nullable();
+
             $table->string("refund_id", 35)->nullable()->index();
             $table->string("refund_status", 30)->nullable();
             $table->decimal("refund_amount", 12, 2)->nullable();
@@ -60,6 +74,11 @@ class BancoInterHelper
             $table->mediumText("raw_response")->nullable();
             $table->timestamps();
         });
+
+        // Ensure additive columns even for brand-new table creation (in case create()
+        // closure lags behind in a given deployment).
+        self::ensureRefundColumns();
+        self::ensureJurosMoraColumns();
     }
 
     private static function ensureRefundColumns(): void
@@ -79,6 +98,40 @@ class BancoInterHelper
             },
             "refunded_at" => function ($table) {
                 $table->dateTime("refunded_at")->nullable();
+            },
+        ];
+
+        foreach ($columns as $column => $definition) {
+            if (!Capsule::schema()->hasColumn(self::TABLE, $column)) {
+                Capsule::schema()->table(self::TABLE, $definition);
+            }
+        }
+    }
+
+    /**
+     * Additive migration for juros/mora/multa snapshot + received breakdown columns.
+     * Safe to call repeatedly. Mirrors the pattern used for refund_* columns.
+     */
+    private static function ensureJurosMoraColumns(): void
+    {
+        $columns = [
+            "multa_taxa" => function ($table) {
+                $table->decimal("multa_taxa", 8, 4)->nullable();
+            },
+            "mora_taxa" => function ($table) {
+                $table->decimal("mora_taxa", 8, 4)->nullable();
+            },
+            "mora_codigo" => function ($table) {
+                $table->string("mora_codigo", 20)->nullable();
+            },
+            "paid_juros" => function ($table) {
+                $table->decimal("paid_juros", 12, 2)->nullable();
+            },
+            "paid_multa" => function ($table) {
+                $table->decimal("paid_multa", 12, 2)->nullable();
+            },
+            "paid_desconto" => function ($table) {
+                $table->decimal("paid_desconto", 12, 2)->nullable();
             },
         ];
 
@@ -242,6 +295,19 @@ class BancoInterHelper
     /**
      * Translate gateway params into the discount/interest/fine block expected
      * by the Banco Inter cobrança v3 API.
+     *
+     * IMPORTANT (juros/mora semantics):
+     * - "mora" uses codigo=TAXAMENSAL + taxa=monthly percentage points (e.g. 1 for 1% a.m.).
+     * - The bank applies the mora automatically after dataVencimento and typically prorates
+     *   the monthly taxa by days (commonly /30). The exact proration (30/360, actual/365 etc.)
+     *   is controlled by the bank and visible on the emitted boleto PDF.
+     * - "multa" is a one-time PERCENTUAL applied after vencimento.
+     * - "taxa" values are the human-facing percentage numbers (2.0 = 2%), NOT the 0.02 fraction.
+     * - We deliberately keep the wire shape identical to previous versions for compatibility.
+     *
+     * Callers that want to snapshot the source percentages for auditing should read
+     * $params["multa_pct"] / $params["juros_pct"] themselves around the call site
+     * (see generateForInvoice).
      */
     public static function buildChargeOptions(array $params): array
     {
@@ -282,6 +348,79 @@ class BancoInterHelper
         }
 
         return $options;
+    }
+
+    /**
+     * Approximate accrued multa + mora for a given nominal + days late.
+     * Uses simple linear proration (monthly / 30). This is for UI preview / admin
+     * visibility only — the authoritative amount is always the one computed by
+     * Banco Inter and shown on the boleto PDF / at settlement time.
+     *
+     * Returns: ['multa' => float, 'juros' => float, 'total_accrued' => float, 'note' => string]
+     */
+    public static function estimateAccrued(float $nominal, float $moraMensalPct, int $daysLate, float $multaPct = 0): array
+    {
+        $nominal = max(0, $nominal);
+        $daysLate = max(0, $daysLate);
+        $multa = $multaPct > 0 ? round($nominal * ($multaPct / 100), 2) : 0.0;
+
+        $dailyFactor = $moraMensalPct > 0 ? ($moraMensalPct / 100) / 30 : 0;
+        $juros = $nominal * $dailyFactor * $daysLate;
+        $juros = round($juros, 2);
+
+        return [
+            "multa" => $multa,
+            "juros" => $juros,
+            "total_accrued" => round($multa + $juros, 2),
+            "note" => "Aproximado (taxa mensal prorrateada /30). O boleto/PDF do Banco Inter é a fonte oficial.",
+        ];
+    }
+
+    /**
+     * Best-effort extraction of payment breakdown from a webhook event or a
+     * getCollection() response. Inter may include explicit component values on
+     * settlement events (valorJuros, valorMulta etc.) or under nested keys.
+     *
+     * Falls back gracefully; the sum of components is not guaranteed to equal
+     * the total received (tarifas, other adjustments etc. may exist).
+     */
+    public static function parsePaymentBreakdown(array $payload): array
+    {
+        $get = function (array $paths) use ($payload) {
+            foreach ($paths as $p) {
+                $v = $payload;
+                foreach (explode(".", $p) as $seg) {
+                    if (!is_array($v) || !array_key_exists($seg, $v)) {
+                        $v = null;
+                        break;
+                    }
+                    $v = $v[$seg];
+                }
+                if ($v !== null && $v !== "") {
+                    return is_numeric($v) ? (float) $v : null;
+                }
+            }
+            return null;
+        };
+
+        $principal = $get(["valorNominal", "cobranca.valorNominal", "boleto.valorNominal"]) ?? null;
+        $juros     = $get(["valorJuros", "juros", "mora", "cobranca.juros", "pix.juros"]) ?? null;
+        $multa     = $get(["valorMulta", "multa", "cobranca.multa", "pix.multa"]) ?? null;
+        $desconto  = $get(["valorDesconto", "desconto", "cobranca.desconto", "pix.desconto"]) ?? null;
+        $tarifa    = $get(["valorTarifa", "tarifa", "pix.valorTarifa"]) ?? null;
+        $total     = $get([
+            "valorTotalRecebimento", "valorPago", "valorRecebido",
+            "valor", "amount", "pix.valor", "pix.valorPago", "pix.amount"
+        ]) ?? null;
+
+        return [
+            "principal" => $principal,
+            "juros"     => $juros,
+            "multa"     => $multa,
+            "desconto"  => $desconto,
+            "tarifa"    => $tarifa,
+            "total"     => $total,
+        ];
     }
 
     /** Persist a line into WHMCS's gateway log without mirroring secrets. */
@@ -384,10 +523,63 @@ class BancoInterHelper
 
     public static function systemUrl(): string
     {
-        return rtrim(
-            (string) Capsule::table("tblconfiguration")->where("setting", "SystemURL")->value("value"),
-            "/"
-        );
+        $url = (string) Capsule::table("tblconfiguration")->where("setting", "SystemURL")->value("value");
+
+        if ($url !== '') {
+            return rtrim($url, "/");
+        }
+
+        // Fallbacks (useful when SystemURL is not yet saved in the DB)
+        if (!empty($_SERVER['REQUEST_SCHEME']) && !empty($_SERVER['HTTP_HOST'])) {
+            $scheme = $_SERVER['REQUEST_SCHEME'];
+            $host = $_SERVER['HTTP_HOST'];
+            $script = $_SERVER['SCRIPT_NAME'] ?? '';
+            // Try to guess the WHMCS root (strip /admin or /modules etc.)
+            $base = preg_replace('#/(admin|modules|includes).*$#', '', $script);
+            if ($base === '' || $base === $script) {
+                $base = '/';
+            }
+            return rtrim($scheme . '://' . $host . $base, '/');
+        }
+
+        if (!empty($_SERVER['HTTP_HOST'])) {
+            return 'https://' . $_SERVER['HTTP_HOST'];
+        }
+
+        return '';
+    }
+
+    /**
+     * Returns a reliable absolute URL to the rich admin panel (tools.php via the stable admin.php shim).
+     * Used to embed the unified configuration (multa/juros, webhook, simulador, extrato...) inside
+     * the native gateway config page or in the addon.
+     *
+     * Tries official SystemURL first. Falls back to reconstructing from current request
+     * ($_SERVER) so the panel link/iframe works even if SystemURL is not yet saved in tblconfiguration.
+     */
+    public static function adminPanelUrl(string $view = "config"): string
+    {
+        // Direct to tools.php (the rich panel renderer). admin.php is just a thin stable require shim if needed.
+        $path = "/modules/gateways/seixastec_bancointer/tools.php?view=" . urlencode($view);
+
+        $base = self::systemUrl();
+        if ($base !== "") {
+            return rtrim($base, "/") . $path;
+        }
+
+        // Robust absolute URL from the current admin request context (when SystemURL is empty).
+        $isHttps = (!empty($_SERVER["HTTPS"]) && strtolower((string) $_SERVER["HTTPS"]) !== "off")
+            || (isset($_SERVER["SERVER_PORT"]) && (string) $_SERVER["SERVER_PORT"] === "443");
+        $scheme = $isHttps ? "https" : "http";
+        $host = $_SERVER["HTTP_HOST"] ?? ($_SERVER["SERVER_NAME"] ?? "localhost");
+
+        $script = (string) ($_SERVER["SCRIPT_NAME"] ?? "");
+        $prefix = "";
+        if (preg_match("#^(.*)/(admin|modules|includes)(/|$)#i", $script, $m)) {
+            $prefix = $m[1];
+        }
+
+        return $scheme . "://" . $host . $prefix . $path;
     }
 
     public static function upsertGatewaySetting(string $gateway, string $setting, string $value): void
@@ -431,5 +623,68 @@ class BancoInterHelper
         self::upsertGatewaySetting($gateway, "webhook_secret_created_at", date("Y-m-d H:i:s"));
 
         return $secret;
+    }
+
+    /**
+     * Retrieve a still-valid cached OAuth access token from persistent storage (tblconfiguration).
+     * Returns null if no token or if it is expired/expiring soon.
+     */
+    public static function getCachedOAuthToken(): ?array
+    {
+        $token = Capsule::table("tblconfiguration")
+            ->where("setting", self::OAUTH_TOKEN_SETTING)
+            ->value("value");
+
+        $expiresAt = Capsule::table("tblconfiguration")
+            ->where("setting", self::OAUTH_EXPIRES_SETTING)
+            ->value("value");
+
+        if ($token && $expiresAt && (int) $expiresAt > time() + 30) {
+            return [
+                "access_token" => (string) $token,
+                "expires_at" => (int) $expiresAt,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Persist a freshly obtained OAuth access token so other PHP requests (page loads, crons, etc.)
+     * can reuse it without hitting /oauth/v2/token again (prevents 429 rate limits on the token endpoint).
+     */
+    public static function storeOAuthToken(string $accessToken, int $expiresAt): void
+    {
+        self::upsertModuleSetting(self::OAUTH_TOKEN_SETTING, $accessToken);
+        self::upsertModuleSetting(self::OAUTH_EXPIRES_SETTING, (string) $expiresAt);
+    }
+
+    /**
+     * Clears any cached OAuth token. Useful as emergency button when hitting 429
+     * rate limits on the token endpoint (forces a fresh token on next API call).
+     */
+    public static function clearOAuthTokenCache(): void
+    {
+        Capsule::table("tblconfiguration")
+            ->whereIn("setting", [self::OAUTH_TOKEN_SETTING, self::OAUTH_EXPIRES_SETTING])
+            ->delete();
+    }
+
+    /**
+     * Generic upsert for module-level transient settings in tblconfiguration.
+     * Used for OAuth token caching (not to be confused with gateway-specific settings).
+     */
+    private static function upsertModuleSetting(string $setting, string $value): void
+    {
+        $updated = Capsule::table("tblconfiguration")
+            ->where("setting", $setting)
+            ->update(["value" => $value]);
+
+        if (!$updated) {
+            Capsule::table("tblconfiguration")->insert([
+                "setting" => $setting,
+                "value" => $value,
+            ]);
+        }
     }
 }

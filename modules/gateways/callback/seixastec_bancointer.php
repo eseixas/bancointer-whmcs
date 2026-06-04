@@ -249,7 +249,43 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
 
     addInvoicePayment($invoiceId, $transId, $amount, $fee, $gatewayModule);
     logTransaction($gatewayParams["name"], $event, "Successful");
+
+    // Capture any explicit breakdown of juros/multa/desconto from the settlement payload.
+    // This makes the "calculo de juros do boleto" auditable after the fact.
+    $breakdown = BancoInterHelper::parsePaymentBreakdown($event);
+    if (is_array($remote)) {
+        $remoteBreak = BancoInterHelper::parsePaymentBreakdown($remote);
+        // Prefer non-null values from remote when event is sparse.
+        foreach ($remoteBreak as $k => $v) {
+            if ($v !== null) {
+                $breakdown[$k] = $v;
+            }
+        }
+    }
+
+    $paidExtras = [];
+    if (($breakdown["juros"] ?? null) !== null) {
+        $paidExtras["paid_juros"] = (float) $breakdown["juros"];
+    }
+    if (($breakdown["multa"] ?? null) !== null) {
+        $paidExtras["paid_multa"] = (float) $breakdown["multa"];
+    }
+    if (($breakdown["desconto"] ?? null) !== null) {
+        $paidExtras["paid_desconto"] = (float) $breakdown["desconto"];
+    }
+
     BancoInterHelper::markPaid((int) $tx->id, $amount, seixastec_bancointer_paidAt($event));
+
+    if ($paidExtras) {
+        BancoInterHelper::saveTransaction(array_merge(
+            ["id" => (int) $tx->id, "invoice_id" => $invoiceId],
+            $paidExtras
+        ));
+        BancoInterHelper::log("webhook.payment_breakdown", [
+            "invoice_id" => $invoiceId,
+            "codigo_solicitacao" => $tx->codigo_solicitacao,
+        ], $breakdown);
+    }
 
     return true;
 }

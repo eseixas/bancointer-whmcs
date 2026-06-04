@@ -25,7 +25,6 @@ if (!$params) {
 }
 
 $views = [
-    "config" => "Configuracoes",
     "webhook" => "Webhook",
     "extract" => "Extrato de Boletos",
     "metrics" => "Metricas de Emissao",
@@ -33,10 +32,12 @@ $views = [
     "webhook_logs" => "Logs Webhook",
 ];
 
-$view = (string) ($_GET["view"] ?? "config");
+$view = (string) ($_GET["view"] ?? "webhook");
 if (!isset($views[$view])) {
-    $view = "config";
+    $view = "webhook";
 }
+
+$isMinimal = !empty($_GET["minimal"]);
 
 $flash = null;
 $errors = [];
@@ -50,12 +51,6 @@ if (strtoupper((string) ($_SERVER["REQUEST_METHOD"] ?? "GET")) === "POST") {
     $action = (string) ($_POST["action"] ?? "");
     try {
         switch ($action) {
-            case "save_config":
-                bi_saveConfiguration($_POST);
-                $flash = ["type" => "success", "message" => "Configuracoes salvas com sucesso."];
-                $params = seixastec_bancointer_loadParams() ?: $params;
-                $view = "config";
-                break;
             case "register_webhook":
                 $response = seixastec_bancointer_buildApi($params)->registerWebhook(
                     BancoInterHelper::callbackUrl($params["systemurl"], $params["webhook_secret"] ?? null)
@@ -76,6 +71,11 @@ if (strtoupper((string) ($_SERVER["REQUEST_METHOD"] ?? "GET")) === "POST") {
                 $flash = ["type" => "success", "message" => "Novo token de webhook gerado. Atualize o webhook no Banco Inter para aplicar a nova URL."];
                 $view = "webhook";
                 break;
+            case "clear_oauth_cache":
+                BancoInterHelper::clearOAuthTokenCache();
+                $flash = ["type" => "success", "message" => "Cache de token OAuth limpo. A próxima chamada à API do Banco Inter obterá um token fresco."];
+                $view = "webhook"; // Most relevant tab for token issues
+                break;
             default:
                 $errors[] = "Acao administrativa invalida.";
                 break;
@@ -88,8 +88,15 @@ if (strtoupper((string) ($_SERVER["REQUEST_METHOD"] ?? "GET")) === "POST") {
 $csrfToken = htmlspecialchars(BancoInterHelper::issueCsrfToken("admin_webhook_tools"), ENT_QUOTES);
 $systemUrl = $params["systemurl"] ?? BancoInterHelper::systemUrl();
 $callbackUrl = BancoInterHelper::callbackUrl($systemUrl, $params["webhook_secret"] ?? null);
-$customFieldOptions = bi_getClientDocumentOptions();
-$webhookState = bi_loadWebhookState($params, $callbackUrl);
+
+// Only fetch live webhook status when the user is actually viewing the Webhook tab.
+// This avoids an unnecessary authenticated API call (and potential token fetch)
+// on every load of Config, Extrato, Métricas etc. — reducing pressure on Banco
+// Inter's /oauth/v2/token endpoint (which has strict rate limits → 429 errors).
+$webhookState = ($view === "webhook")
+    ? bi_loadWebhookState($params, $callbackUrl)
+    : ["status" => "Não verificado nesta tela", "remote_url" => "", "message" => ""];
+
 $metrics = bi_loadMetrics();
 $extractRows = $view === "extract" ? bi_loadExtractRows($_GET) : [];
 $logRows = $view === "logs" ? bi_loadModuleLogs($_GET) : [];
@@ -100,18 +107,26 @@ header("Content-Type: text/html; charset=utf-8");
 echo "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
 echo "<title>Banco Inter Boleto e PIX</title>";
 echo "<style>" . bi_adminCss() . "</style>";
+if ($isMinimal) {
+    // Constrain the layout inside the embedded iframe so it doesn't "occupy the whole frame".
+    // Sidebar stays visible and narrow; main content area scrolls. Prevents tall logs/pre from taking over.
+    echo '<style>html,body{height:100%;margin:0;overflow:hidden} .bi-admin{height:100%;display:flex;flex-direction:column} .bi-shell{flex:1;min-height:0;display:flex;gap:8px;padding:6px;overflow:hidden} .bi-sidebar{width:165px;flex:0 0 165px;height:100%;overflow:auto;background:#f8f8f8;border-right:1px solid #e0e0e0} .bi-main{flex:1;min-height:0;overflow:auto} .bi-card{margin-bottom:6px} .bi-breadcrumb{padding:4px 8px;margin-bottom:8px;font-size:11px}</style>';
+}
 echo "</head><body>";
 echo "<div class='bi-admin'>";
-echo "<header class='bi-topbar'><div class='bi-brand'>";
-if ($logoUrl !== "") {
-    echo "<img class='bi-brand-logo' src='" . htmlspecialchars($logoUrl, ENT_QUOTES) . "' alt='Banco Inter'>";
+if (!$isMinimal) {
+    echo "<header class='bi-topbar'><div class='bi-brand'>";
+    if ($logoUrl !== "") {
+        echo "<img class='bi-brand-logo' src='" . htmlspecialchars($logoUrl, ENT_QUOTES) . "' alt='Banco Inter'>";
+    }
+    echo "<div class='bi-brand-copy'><h1>Banco Inter Boleto e PIX</h1><p>Integracao com Banco Inter</p></div></div></header>";
 }
-echo "<div class='bi-brand-copy'><h1>Banco Inter Boleto e PIX</h1><p>Integracao com Banco Inter</p></div></div></header>";
 echo "<div class='bi-shell'>";
 echo "<aside class='bi-sidebar'>";
+$frameTarget = $isMinimal ? ' target="bi-panel-iframe"' : '';
 foreach ($views as $key => $label) {
     $active = $key === $view ? " is-active" : "";
-    echo "<a class='bi-side-link{$active}' href='" . htmlspecialchars(bi_adminUrl($key, [], $systemUrl), ENT_QUOTES) . "'>{$label}</a>";
+    echo "<a class='bi-side-link{$active}' href='" . htmlspecialchars(bi_adminUrl($key, [], $systemUrl), ENT_QUOTES) . "'" . $frameTarget . ">{$label}</a>";
 }
 echo "</aside>";
 echo "<main class='bi-main'>";
@@ -125,9 +140,6 @@ foreach ($errors as $error) {
 }
 
 switch ($view) {
-    case "config":
-        bi_renderConfigCard($params, $customFieldOptions, $csrfToken);
-        break;
     case "webhook":
         bi_renderWebhookCard($params, $webhookState, $callbackUrl, $csrfToken);
         break;
@@ -149,8 +161,17 @@ echo "</main></div></div></body></html>";
 
 function bi_adminUrl(string $view, array $query = [], ?string $systemUrl = null): string
 {
-    $base = ($systemUrl ?: BancoInterHelper::systemUrl()) . "/modules/gateways/seixastec_bancointer/tools.php";
-    return $base . "?" . http_build_query(array_merge(["view" => $view], $query));
+    // Delegate to the robust helper (handles SystemURL + $_SERVER fallback when empty).
+    // We ignore the passed $systemUrl for the base unless we want to force it; the helper is authoritative.
+    $base = BancoInterHelper::adminPanelUrl($view);
+    // Strip the ?view=... that adminPanelUrl added, then re-add with extra query if any.
+    $base = preg_replace('/\?.*$/', '', $base);
+    $base = rtrim($base, "/");
+    $fullQuery = array_merge(["view" => $view], $query);
+    if (!empty($_GET["minimal"])) {
+        $fullQuery["minimal"] = "1";
+    }
+    return $base . "?" . http_build_query($fullQuery);
 }
 
 function bi_logoUrl(): string
@@ -161,67 +182,6 @@ function bi_logoUrl(): string
     }
 
     return BancoInterHelper::systemUrl() . "/modules/gateways/seixastec_bancointer/inter.png";
-}
-
-function bi_saveConfiguration(array $data): void
-{
-    $fields = [
-        "client_id" => trim((string) ($data["client_id"] ?? "")),
-        // client_secret is intentionally excluded — it must be set via
-        // Setup → Payments → Banco Inter to ensure WHMCS encrypts it at rest.
-        "conta_corrente" => trim((string) ($data["conta_corrente"] ?? "")),
-        "cert_path" => trim((string) ($data["cert_path"] ?? "")),
-        "key_path" => trim((string) ($data["key_path"] ?? "")),
-        "auto_generate" => !empty($data["auto_generate"]) ? "on" : "off",
-        "attach_pdf_always" => "off",
-        "dias_baixa" => (string) max(1, (int) ($data["dias_baixa"] ?? 15)),
-        "multa_pct" => (string) (float) ($data["multa_pct"] ?? 0),
-        "juros_pct" => (string) (float) ($data["juros_pct"] ?? 0),
-        "desconto_pct" => (string) (float) ($data["desconto_pct"] ?? 0),
-        "desconto_fixo" => (string) (float) ($data["desconto_fixo"] ?? 0),
-        "desconto_dias" => (string) max(0, (int) ($data["desconto_dias"] ?? 0)),
-        "cpf_cnpj_field" => bi_sanitizeCustomFieldId($data["cpf_cnpj_field"] ?? ""),
-    ];
-
-    foreach ($fields as $setting => $value) {
-        BancoInterHelper::upsertGatewaySetting("seixastec_bancointer", $setting, $value);
-    }
-}
-
-/**
- * Garante que apenas um ID numérico de custom field do tipo `client` seja persistido
- * em `cpf_cnpj_field`. Qualquer outro input (hash, string, id inexistente) vira "".
- */
-function bi_sanitizeCustomFieldId($raw): string
-{
-    $raw = trim((string) $raw);
-    if ($raw === "" || !ctype_digit($raw)) {
-        return "";
-    }
-
-    $exists = Capsule::table("tblcustomfields")
-        ->where("id", (int) $raw)
-        ->where("type", "client")
-        ->exists();
-
-    return $exists ? $raw : "";
-}
-
-function bi_getClientDocumentOptions(): array
-{
-    $options = ["" => "Usar Tax ID padrao do cliente"];
-    try {
-        $rows = Capsule::table("tblcustomfields")
-            ->where("type", "client")
-            ->orderBy("fieldname")
-            ->get(["id", "fieldname"]);
-        foreach ($rows as $row) {
-            $options[(string) $row->id] = sprintf("[%d] %s", $row->id, $row->fieldname);
-        }
-    } catch (Throwable $e) {
-        // Ignore missing schema in reduced test environments.
-    }
-    return $options;
 }
 
 function bi_loadWebhookState(array $params, string $callbackUrl): array
@@ -238,7 +198,14 @@ function bi_loadWebhookState(array $params, string $callbackUrl): array
         $state["remote_url"] = $remoteUrl;
         $state["status"] = $remoteUrl === $callbackUrl ? "Ativo" : ($remoteUrl !== "" ? "Divergente" : "Nao configurado");
     } catch (Throwable $e) {
-        $state["message"] = $e->getMessage();
+        $msg = $e->getMessage();
+        $lower = strtolower($msg);
+
+        if (strpos($msg, "429") !== false || strpos($lower, "rate") !== false || strpos($lower, "too many") !== false) {
+            $state["message"] = "Banco Inter está retornando 429 (Too Many Requests) no endpoint de token OAuth. Isso é temporário e geralmente causado por acessos frequentes à tela de configuração. Aguarde 1-2 minutos, recarregue a página ou navegue para outra aba (Configurações/Extrato). A emissão e pagamento de boletos/PIX continuam funcionando normalmente na maioria dos casos.";
+        } else {
+            $state["message"] = $msg;
+        }
     }
 
     return $state;
@@ -321,46 +288,15 @@ function bi_normalizeDateFilter($value): ?string
     return $value;
 }
 
-function bi_renderConfigCard(array $params, array $customFieldOptions, string $csrfToken): void
-{
-    echo "<section class='bi-card'><div class='bi-card-title'>Configuracoes do sistema</div><div class='bi-card-body'>";
-    echo "<form method='post' class='bi-form-grid'>";
-    echo "<input type='hidden' name='csrf_token' value='{$csrfToken}'>";
-    echo "<input type='hidden' name='action' value='save_config'>";
-    echo "<div class='bi-form-intro bi-form-span'><h2>Credenciais e regras de cobranca</h2><p>Configure a API Banco Inter, certificados mTLS e regras financeiras usadas na emissao das cobrancas.</p></div>";
-    bi_inputRow("Client ID", "client_id", (string) ($params["client_id"] ?? ""));
-    echo "<label class='bi-form-label'>Client Secret</label><div class='bi-form-control'>";
-    echo "<input class='bi-readonly' readonly value='••••••••' title='Gerenciado pelo WHMCS'>";
-    echo "<small style='display:block;margin-top:4px;color:#888'>Para alterar o Client Secret use <strong>Setup &rarr; Payments &rarr; Banco Inter</strong>. Este painel nunca escreve o segredo para garantir que o WHMCS o armazene de forma criptografada.</small>";
-    echo "</div>";
-    bi_inputRow("Conta Corrente", "conta_corrente", (string) ($params["conta_corrente"] ?? ""));
-    bi_inputRow("Caminho Certificado", "cert_path", (string) ($params["cert_path"] ?? ""));
-    bi_inputRow("Caminho Chave Privada", "key_path", (string) ($params["key_path"] ?? ""));
-    bi_checkboxRow("Gerar automaticamente", "auto_generate", !empty($params["auto_generate"]) && $params["auto_generate"] !== "off");
-    bi_inputRow("Dias para Baixa", "dias_baixa", (string) ($params["dias_baixa"] ?? "15"), "number");
-    bi_inputRow("Multa (%)", "multa_pct", (string) ($params["multa_pct"] ?? "2"), "number", "0.01");
-    bi_inputRow("Juros ao Mes (%)", "juros_pct", (string) ($params["juros_pct"] ?? "1"), "number", "0.01");
-    bi_inputRow("Desconto (%)", "desconto_pct", (string) ($params["desconto_pct"] ?? "0"), "number", "0.01");
-    bi_inputRow("Desconto Fixo (R$)", "desconto_fixo", (string) ($params["desconto_fixo"] ?? "0"), "number", "0.01");
-    bi_inputRow("Dias do Desconto", "desconto_dias", (string) ($params["desconto_dias"] ?? "0"), "number");
-    echo "<label class='bi-form-label'>Origem CPF / CNPJ</label><div class='bi-form-control'><select name='cpf_cnpj_field'>";
-    foreach ($customFieldOptions as $id => $label) {
-        $selected = (string) ($params["cpf_cnpj_field"] ?? "") === (string) $id ? " selected" : "";
-        echo "<option value='" . htmlspecialchars((string) $id, ENT_QUOTES) . "'{$selected}>" . htmlspecialchars($label, ENT_QUOTES) . "</option>";
-    }
-    echo "</select></div>";
-    echo "<div class='bi-form-actions'><button class='bi-btn bi-btn-primary' type='submit'>Salvar Configuracoes</button></div>";
-    echo "</form></div></section>";
-}
-
 function bi_renderWebhookCard(array $params, array $state, string $callbackUrl, string $csrfToken): void
 {
     $createdAt = !empty($params["webhook_secret_created_at"]) ? date("d/m/Y H:i:s", strtotime((string) $params["webhook_secret_created_at"])) : "—";
+    $frameTarget = $isMinimal ? ' target="bi-panel-iframe"' : '';
     echo "<section class='bi-card'><div class='bi-card-title'>Webhook</div><div class='bi-card-body'>";
     echo "<table class='bi-table bi-table-meta'>";
     echo "<tr><th>Status</th><td>" . htmlspecialchars($state["status"], ENT_QUOTES) . "</td></tr>";
     echo "<tr><th>Token Seguranca</th><td><input class='bi-readonly' readonly value='" . htmlspecialchars((string) ($params["webhook_secret"] ?? ""), ENT_QUOTES) . "'>";
-    echo "<form method='post' class='bi-inline-form'><input type='hidden' name='csrf_token' value='{$csrfToken}'><input type='hidden' name='action' value='rotate_secret'><button type='submit' class='bi-btn bi-btn-secondary'>Gerar um novo token de seguranca</button></form></td></tr>";
+    echo "<form method='post' class='bi-inline-form'" . $frameTarget . "><input type='hidden' name='csrf_token' value='{$csrfToken}'><input type='hidden' name='action' value='rotate_secret'><button type='submit' class='bi-btn bi-btn-secondary'>Gerar um novo token de seguranca</button></form></td></tr>";
     echo "<tr><th>URL Conexao</th><td><input class='bi-readonly' readonly value='" . htmlspecialchars($callbackUrl, ENT_QUOTES) . "'></td></tr>";
     echo "<tr><th>Data Criacao</th><td>{$createdAt}</td></tr>";
     echo "</table>";
@@ -368,9 +304,19 @@ function bi_renderWebhookCard(array $params, array $state, string $callbackUrl, 
         echo "<div class='bi-note bi-note-warning'>" . htmlspecialchars($state["message"], ENT_QUOTES) . "</div>";
     }
     echo "<div class='bi-action-stack'>";
-    echo "<form method='post'><input type='hidden' name='csrf_token' value='{$csrfToken}'><input type='hidden' name='action' value='register_webhook'><button type='submit' class='bi-btn bi-btn-success bi-btn-block'>Atualizar Webhook</button></form>";
-    echo "<form method='post' onsubmit=\"return confirm('Remover webhook registrado no Banco Inter?')\"><input type='hidden' name='csrf_token' value='{$csrfToken}'><input type='hidden' name='action' value='delete_webhook'><button type='submit' class='bi-btn bi-btn-danger bi-btn-block'>Deletar Webhook</button></form>";
-    echo "</div></div></section>";
+    echo "<form method='post'" . $frameTarget . "><input type='hidden' name='csrf_token' value='{$csrfToken}'><input type='hidden' name='action' value='register_webhook'><button type='submit' class='bi-btn bi-btn-success bi-btn-block'>Atualizar Webhook</button></form>";
+    echo "<form method='post'" . $frameTarget . " onsubmit=\"return confirm('Remover webhook registrado no Banco Inter?')\"><input type='hidden' name='csrf_token' value='{$csrfToken}'><input type='hidden' name='action' value='delete_webhook'><button type='submit' class='bi-btn bi-btn-danger bi-btn-block'>Deletar Webhook</button></form>";
+    echo "</div>";
+
+    // Maintenance / token cache (useful for 429). Kept here after removing the old "Configurações do sistema" card.
+    echo "<form method='post' style='margin-top:16px'" . $frameTarget . " onsubmit=\"return confirm('Limpar o cache de token OAuth? Isso força uma nova autenticação na próxima chamada à API (útil para resolver erros 429).');\">";
+    echo "<input type='hidden' name='csrf_token' value='{$csrfToken}'>";
+    echo "<input type='hidden' name='action' value='clear_oauth_cache'>";
+    echo "<button type='submit' class='bi-btn bi-btn-secondary'>Limpar cache de token OAuth (resolver 429 / forçar novo token)</button>";
+    echo "</form>";
+    echo "<small style='display:block;margin-top:6px;color:#666'>O token OAuth é agora cacheado de forma persistente para evitar chamadas excessivas ao endpoint de autenticação do Banco Inter.</small>";
+
+    echo "</div></section>";
 }
 
 function bi_renderExtractCard(array $rows, ?string $systemUrl = null): void
@@ -429,7 +375,7 @@ function bi_renderWebhookLogsCard(array $rows, string $csrfToken, ?string $syste
             echo "<td>" . (int) ($row->invoice_id ?? 0) . "</td>";
             echo "<td>" . htmlspecialchars((string) ($row->status ?? ""), ENT_QUOTES) . "</td>";
             echo "<td>" . htmlspecialchars((string) ($row->updated_at ?? ""), ENT_QUOTES) . "</td>";
-            echo "<td><pre class='bi-pre'>" . htmlspecialchars(mb_substr((string) ($row->raw_response ?? ""), 0, 500), ENT_QUOTES) . "</pre></td>";
+            echo "<td><pre class='bi-pre' title='Payload completo no log do módulo'>" . htmlspecialchars(mb_substr((string) ($row->raw_response ?? ""), 0, 180), ENT_QUOTES) . (strlen((string)($row->raw_response ?? '')) > 180 ? '…' : '') . "</pre></td>";
             echo "</tr>";
         }
         echo "</tbody></table>";
@@ -470,8 +416,9 @@ function bi_dateFilter(string $view, string $buttonLabel, ?string $systemUrl = n
     $end = htmlspecialchars((string) ($_GET["end"] ?? ""), ENT_QUOTES);
     $action = htmlspecialchars(bi_adminUrl($view, [], $systemUrl), ENT_QUOTES);
     $label = htmlspecialchars($buttonLabel, ENT_QUOTES);
+    $frameTarget = !empty($_GET["minimal"]) ? ' target="bi-panel-iframe"' : '';
 
-    return "<form method='get' class='bi-filter-row'>"
+    return "<form method='get' class='bi-filter-row'" . $frameTarget . ">"
         . "<input type='hidden' name='view' value='" . htmlspecialchars($view, ENT_QUOTES) . "'>"
         . "<div><label>Data inicio</label><input type='date' name='start' value='{$start}'></div>"
         . "<div><label>Data final</label><input type='date' name='end' value='{$end}'></div>"
@@ -553,7 +500,7 @@ body{margin:0;background:#f2f3f5;font-family:"Segoe UI",Tahoma,sans-serif;color:
 .bi-filter-row input{width:100%;box-sizing:border-box;border:1px solid #cfcfcf;padding:7px 9px;font-size:13px}
 .bi-filter-action{padding-bottom:1px}
 .bi-empty{padding:14px;border:1px dashed #cfcfcf;background:#fafafa;color:#666}
-.bi-pre{white-space:pre-wrap;margin:0;font-size:12px;line-height:1.4;max-width:100%;overflow:auto}
+.bi-pre{white-space:pre-wrap;margin:0;font-size:11px;line-height:1.3;max-width:100%;max-height:160px;overflow:auto;border:1px solid #eee;padding:4px;background:#fafafa}
 .bi-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
 .bi-metric{padding:12px;background:#f7f7f7;border:1px solid #dedede;border-radius:4px}
 .bi-metric span{display:block;font-size:12px;color:#777;margin-bottom:6px}
