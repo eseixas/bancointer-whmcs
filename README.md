@@ -68,7 +68,7 @@ administrativo do módulo.
 | Conta Corrente | Obrigatório apenas em aplicações multi-conta |
 | Gerar Boleto/PIX automaticamente | Dispara emissão ao criar a fatura (hook InvoiceCreation) |
 | Dias para Baixa Automática | Dias após o vencimento para cancelar no banco (padrão: 15) |
-| Multa (%) / Juros ao Mês (%) | Regras pós-vencimento (TAXAMENSAL; prorrateado pelo banco; simulador no painel admin para visualizar o efeito) |
+| Multa (%) / Juros ao Mês (%) | Regras pós-vencimento no **boleto** (TAXAMENSAL; calculadas pelo Banco Inter). O WHMCS só registra multa/juros no ledger **após o pagamento** |
 | Desconto (%, R$, dias) | Desconto para pagamento antecipado |
 | Campo Customizado de CPF/CNPJ | Dropdown com os custom fields de cliente; se vazio usa `tblclients.tax_id` |
 
@@ -95,15 +95,25 @@ painel administrativo. Sempre que gerar ou rotacionar esse token, clique em
 Use a própria tela de **Webhook** para conferir se a URL remota está igual à
 URL local exibida pelo módulo e para remover o registro quando necessário.
 
+## Multa, juros e late fees do WHMCS
+
+Para faturas com gateway `seixastec_bancointer`:
+
+- A multa e os juros configurados no gateway são enviados ao Banco Inter e aparecem no **PDF do boleto** (valor atualizado calculado pelo banco).
+- O módulo **ignora** late fees nativas do WHMCS (Setup → General Settings → Invoices → Late Fee) nessas faturas — evita Debit Notes no ledger antes do pagamento.
+- Quando o boleto é pago, o webhook adiciona itens `Multa por atraso (Banco Inter)` / `Juros de mora (Banco Inter)` na fatura e em seguida registra o pagamento com o valor total recebido.
+- Faturas antigas com late fee WHMCS incorreto são limpas automaticamente no cron diário (enquanto ainda `Unpaid`).
+
+Recomendado: deixar Late Fee global do WHMCS em **0** se todas as faturas usarem Banco Inter com multa/juros no gateway.
+
 ## Fluxo de pagamento
 
 1. Cliente visualiza a fatura → `seixastec_bancointer_link()` mostra QR Code PIX + linha
    digitável + link de PDF.
 2. Se *Gerar automaticamente* estiver desligado, o cliente clica em
    **Gerar Boleto + PIX** (handler `generate.php`).
-3. Banco Inter dispara webhook ao compensar → callback chama `addInvoicePayment()`
-   e marca a transação como `PAID`.
-4. Hook `DailyCronJob` cancela cobranças vencidas além de `dias_baixa`.
+3. Banco Inter dispara webhook ao compensar → callback sincroniza multa/juros no ledger (se houver), chama `addInvoicePayment()` e marca a transação como `PAID`.
+4. Hook `DailyCronJob` cancela cobranças vencidas além de `dias_baixa` e remove late fees WHMCS remanescentes.
 
 ## Refund PIX
 

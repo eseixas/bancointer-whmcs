@@ -54,6 +54,7 @@ function seixastec_bancointer_config(): array
     $richPanel = '<div style="margin:16px 0 8px;padding:0;border:1px solid #e6d9a8;border-radius:5px;overflow:hidden;">'
         . '<div style="background:#fff8e1;padding:10px 14px;border-bottom:1px solid #f0d58a;color:#664e00;font-size:13px;line-height:1.45;">'
         . '<strong>INFO:</strong> Regras operacionais (multa, juros, descontos, geração automática, dias para baixa, origem do CPF/CNPJ) são configuradas nos campos acima e salvas normalmente. '
+        . 'Multa/juros do boleto são calculados pelo Banco Inter; o WHMCS só registra esses valores no ledger após o pagamento (late fees nativas do WHMCS são ignoradas neste gateway). '
         . 'Abaixo estão as ferramentas administrativas (webhook, extrato, métricas, logs).'
         . '</div>'
         . '<iframe name="bi-panel-iframe" src="' . $safeEmbed . '" style="width:100%;height:680px;border:0;border-top:1px solid #e6d9a8;background:#fff;display:block;"></iframe>'

@@ -17,6 +17,9 @@ class BancoInterHelper
 {
     public const TABLE = "mod_seixastec_bancointer_transactions";
     public const LOG_GATEWAY = "seixastec_bancointer";
+    public const GATEWAY_MODULE = "seixastec_bancointer";
+    public const CHARGE_DESC_MULTA = "Multa por atraso (Banco Inter)";
+    public const CHARGE_DESC_JUROS = "Juros de mora (Banco Inter)";
     // Local synonyms (PENDING/CREATED/PROCESSING) + situações reais da API cobrança v3 do Inter.
     private const NON_TERMINAL_STATUSES = ["PENDING", "CREATED", "PROCESSING", "A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO", "VENCIDO"];
     public const TERMINAL_CANCELLED_STATUSES = ["CANCELLED", "EXPIRED", "CANCELADO", "EXPIRADO"];
@@ -36,6 +39,7 @@ class BancoInterHelper
         if (Capsule::schema()->hasTable(self::TABLE)) {
             self::ensureRefundColumns();
             self::ensureJurosMoraColumns();
+            self::ensureChargesSyncedColumn();
             return;
         }
 
@@ -79,6 +83,16 @@ class BancoInterHelper
         // closure lags behind in a given deployment).
         self::ensureRefundColumns();
         self::ensureJurosMoraColumns();
+        self::ensureChargesSyncedColumn();
+    }
+
+    private static function ensureChargesSyncedColumn(): void
+    {
+        if (!Capsule::schema()->hasColumn(self::TABLE, "charges_synced_at")) {
+            Capsule::schema()->table(self::TABLE, function ($table) {
+                $table->dateTime("charges_synced_at")->nullable();
+            });
+        }
     }
 
     private static function ensureRefundColumns(): void
@@ -686,5 +700,262 @@ class BancoInterHelper
                 "value" => $value,
             ]);
         }
+    }
+
+    public static function isBancoInterInvoice(int $invoiceId): bool
+    {
+        if ($invoiceId <= 0) {
+            return false;
+        }
+
+        $invoice = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+
+        return $invoice
+            && strtolower((string) ($invoice->paymentmethod ?? "")) === self::GATEWAY_MODULE;
+    }
+
+    /**
+     * Locate WHMCS-native late-fee rows (items + ledger accounts), excluding
+     * charges we add after Banco Inter settlement.
+     *
+     * @return array{items: int[], accounts: int[]}
+     */
+    public static function findWhmcsLateFeeEntries(int $invoiceId): array
+    {
+        $itemIds = [];
+        $accountIds = [];
+
+        $items = Capsule::table("tblinvoiceitems")
+            ->where("invoiceid", $invoiceId)
+            ->get();
+
+        foreach ($items as $item) {
+            if (self::isBancoInterChargeItem((string) ($item->description ?? ""))) {
+                continue;
+            }
+            if (self::isWhmcsLateFeeDescription((string) ($item->description ?? ""), (string) ($item->type ?? ""))) {
+                $itemIds[] = (int) $item->id;
+            }
+        }
+
+        if (Capsule::schema()->hasTable("tblaccounts")) {
+            $accounts = Capsule::table("tblaccounts")
+                ->where("invoiceid", $invoiceId)
+                ->get();
+
+            foreach ($accounts as $account) {
+                if (self::isWhmcsLateFeeAccountDescription((string) ($account->description ?? ""))) {
+                    $accountIds[] = (int) $account->id;
+                }
+            }
+        }
+
+        return ["items" => $itemIds, "accounts" => $accountIds];
+    }
+
+    public static function removeWhmcsLateFeeEntries(int $invoiceId): bool
+    {
+        if (!self::isBancoInterInvoice($invoiceId)) {
+            return false;
+        }
+
+        $entries = self::findWhmcsLateFeeEntries($invoiceId);
+        if ($entries["items"] === [] && $entries["accounts"] === []) {
+            return false;
+        }
+
+        if ($entries["items"] !== []) {
+            Capsule::table("tblinvoiceitems")->whereIn("id", $entries["items"])->delete();
+        }
+
+        if ($entries["accounts"] !== []) {
+            Capsule::table("tblaccounts")->whereIn("id", $entries["accounts"])->delete();
+        }
+
+        self::recalculateInvoiceTotal($invoiceId);
+
+        self::log("late_fee.removed", [
+            "invoice_id" => $invoiceId,
+            "item_ids" => $entries["items"],
+            "account_ids" => $entries["accounts"],
+        ], "WHMCS late fee entries removed for Banco Inter invoice");
+
+        if (function_exists("logActivity")) {
+            logActivity("Banco Inter: removidos ajustes de late fee WHMCS da fatura #{$invoiceId}");
+        }
+
+        return true;
+    }
+
+    /**
+     * Batch cleanup for unpaid Banco Inter invoices that still carry WHMCS late fees.
+     */
+    public static function cleanupWhmcsLateFeesBatch(int $limit = 50): int
+    {
+        $invoiceIds = Capsule::table("tblinvoices")
+            ->where("paymentmethod", self::GATEWAY_MODULE)
+            ->where("status", "Unpaid")
+            ->orderBy("id", "asc")
+            ->limit($limit)
+            ->pluck("id")
+            ->all();
+
+        $cleaned = 0;
+        foreach ($invoiceIds as $invoiceId) {
+            if (self::removeWhmcsLateFeeEntries((int) $invoiceId)) {
+                $cleaned++;
+            }
+        }
+
+        return $cleaned;
+    }
+
+    /**
+     * Add multa/juros line items from bank settlement, then recalculate invoice total.
+     * Idempotent: skips when charges_synced_at is set or matching items already exist.
+     */
+    public static function applyReceivedChargesToInvoice(int $invoiceId, float $multa, float $juros, ?int $transactionRowId = null): bool
+    {
+        if (!self::isBancoInterInvoice($invoiceId)) {
+            return false;
+        }
+
+        $multa = round(max(0, $multa), 2);
+        $juros = round(max(0, $juros), 2);
+
+        if ($multa < 0.01 && $juros < 0.01) {
+            return false;
+        }
+
+        if ($transactionRowId !== null) {
+            self::ensureSchema();
+            $tx = Capsule::table(self::TABLE)->where("id", $transactionRowId)->first();
+            if ($tx && !empty($tx->charges_synced_at)) {
+                return false;
+            }
+        }
+
+        $invoice = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+        if (!$invoice || (string) $invoice->status === "Paid") {
+            return false;
+        }
+
+        $dueDate = ($invoice->duedate ?? null) && $invoice->duedate !== "0000-00-00"
+            ? (string) $invoice->duedate
+            : date("Y-m-d");
+
+        $added = false;
+
+        if ($multa >= 0.01 && !self::hasChargeItem($invoiceId, self::CHARGE_DESC_MULTA)) {
+            Capsule::table("tblinvoiceitems")->insert([
+                "invoiceid" => $invoiceId,
+                "userid" => (int) $invoice->userid,
+                "type" => "",
+                "relid" => 0,
+                "description" => self::CHARGE_DESC_MULTA,
+                "amount" => $multa,
+                "taxed" => 0,
+                "duedate" => $dueDate,
+                "paymentmethod" => (string) $invoice->paymentmethod,
+                "notes" => "",
+            ]);
+            $added = true;
+        }
+
+        if ($juros >= 0.01 && !self::hasChargeItem($invoiceId, self::CHARGE_DESC_JUROS)) {
+            Capsule::table("tblinvoiceitems")->insert([
+                "invoiceid" => $invoiceId,
+                "userid" => (int) $invoice->userid,
+                "type" => "",
+                "relid" => 0,
+                "description" => self::CHARGE_DESC_JUROS,
+                "amount" => $juros,
+                "taxed" => 0,
+                "duedate" => $dueDate,
+                "paymentmethod" => (string) $invoice->paymentmethod,
+                "notes" => "",
+            ]);
+            $added = true;
+        }
+
+        if (!$added) {
+            return false;
+        }
+
+        self::recalculateInvoiceTotal($invoiceId);
+
+        if ($transactionRowId !== null) {
+            Capsule::table(self::TABLE)
+                ->where("id", $transactionRowId)
+                ->update([
+                    "charges_synced_at" => date("Y-m-d H:i:s"),
+                    "updated_at" => date("Y-m-d H:i:s"),
+                ]);
+        }
+
+        self::log("charges.applied", [
+            "invoice_id" => $invoiceId,
+            "multa" => $multa,
+            "juros" => $juros,
+        ], "Multa/juros do Banco Inter aplicados na fatura");
+
+        return true;
+    }
+
+    public static function recalculateInvoiceTotal(int $invoiceId): void
+    {
+        if (!function_exists("updateInvoiceTotal")) {
+            $path = defined("ROOTDIR") ? ROOTDIR . "/includes/invoicefunctions.php" : null;
+            if ($path && is_file($path)) {
+                require_once $path;
+            }
+        }
+
+        if (function_exists("updateInvoiceTotal")) {
+            updateInvoiceTotal($invoiceId);
+        }
+    }
+
+    private static function hasChargeItem(int $invoiceId, string $description): bool
+    {
+        return Capsule::table("tblinvoiceitems")
+            ->where("invoiceid", $invoiceId)
+            ->where("description", $description)
+            ->exists();
+    }
+
+    private static function isBancoInterChargeItem(string $description): bool
+    {
+        return str_contains($description, "(Banco Inter)");
+    }
+
+    private static function isWhmcsLateFeeDescription(string $description, string $type): bool
+    {
+        if (self::isBancoInterChargeItem($description)) {
+            return false;
+        }
+
+        $typeNorm = strtoupper(trim($type));
+        if ($typeNorm === "LATEFEE") {
+            return true;
+        }
+
+        $lower = strtolower($description);
+
+        return str_contains($lower, "late fee")
+            || str_contains($lower, "debit note for late fee")
+            || str_contains($lower, "taxa de atraso")
+            || str_contains($lower, "multa por atraso")
+            || str_contains($lower, "juros de mora")
+            || str_contains($lower, "encargo por atraso");
+    }
+
+    private static function isWhmcsLateFeeAccountDescription(string $description): bool
+    {
+        $lower = strtolower($description);
+
+        return str_contains($lower, "late fee")
+            || str_contains($lower, "debit note for late fee")
+            || str_contains($lower, "taxa de atraso");
     }
 }

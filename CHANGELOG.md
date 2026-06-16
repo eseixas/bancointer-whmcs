@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-06-16
+
+### Changed
+- Multa e juros passam a ser cobrados **somente no boleto** (regras enviadas ao Banco Inter). O WHMCS não aplica mais late fees nativas em faturas com gateway `seixastec_bancointer`.
+- No webhook de pagamento, multa/juros recebidos do banco são registrados na fatura como itens `"Multa por atraso (Banco Inter)"` e `"Juros de mora (Banco Inter)"` **antes** de `addInvoicePayment()`, alinhando ledger e valor pago.
+- Cron diário remove late fees WHMCS remanescentes em faturas Banco Inter ainda não pagas (corrige faturas afetadas anteriormente, ex. ledger com Debit Note).
+
+### Added
+- Hook `includes/hooks/seixastec_bancointer_late_fees.php` (`AddInvoiceLateFee` + limpeza em `DailyCronJob`).
+- Coluna `charges_synced_at` em `mod_seixastec_bancointer_transactions` para idempotência na sincronização pós-pagamento.
+
 ## [1.4.9] - 2026-05-?? 
 
 ### Fixed

@@ -17,7 +17,7 @@ function seixastec_bancointer_admin_config(): array
     return [
         "name" => "Banco Inter Boleto e PIX",
         "description" => "Atalho administrativo para configuracoes, webhook, extrato, metricas e logs do gateway Banco Inter.",
-        "version" => "1.4.9",
+        "version" => "1.5.0",
         "author" => "Seixas Tecnologia",
         "language" => "portuguese-br",
         "fields" => [],

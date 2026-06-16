@@ -247,15 +247,10 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
         return false;
     }
 
-    addInvoicePayment($invoiceId, $transId, $amount, $fee, $gatewayModule);
-    logTransaction($gatewayParams["name"], $event, "Successful");
-
     // Capture any explicit breakdown of juros/multa/desconto from the settlement payload.
-    // This makes the "calculo de juros do boleto" auditable after the fact.
     $breakdown = BancoInterHelper::parsePaymentBreakdown($event);
     if (is_array($remote)) {
         $remoteBreak = BancoInterHelper::parsePaymentBreakdown($remote);
-        // Prefer non-null values from remote when event is sparse.
         foreach ($remoteBreak as $k => $v) {
             if ($v !== null) {
                 $breakdown[$k] = $v;
@@ -263,12 +258,34 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
         }
     }
 
-    $paidExtras = [];
-    if (($breakdown["juros"] ?? null) !== null) {
-        $paidExtras["paid_juros"] = (float) $breakdown["juros"];
+    $paidMulta = ($breakdown["multa"] ?? null) !== null ? round((float) $breakdown["multa"], 2) : 0.0;
+    $paidJuros = ($breakdown["juros"] ?? null) !== null ? round((float) $breakdown["juros"], 2) : 0.0;
+
+    if ($paidMulta < 0.01 && $paidJuros < 0.01 && $tx->amount !== null) {
+        $nominal = round((float) $tx->amount, 2);
+        $extra = round(max(0, $amount - $nominal), 2);
+        if ($extra >= 0.01) {
+            $paidJuros = $extra;
+            BancoInterHelper::log("webhook.charges_estimated", [
+                "invoice_id" => $invoiceId,
+                "nominal" => $nominal,
+                "received" => $amount,
+            ], ["estimated_juros" => $extra]);
+        }
     }
-    if (($breakdown["multa"] ?? null) !== null) {
-        $paidExtras["paid_multa"] = (float) $breakdown["multa"];
+
+    BancoInterHelper::removeWhmcsLateFeeEntries($invoiceId);
+    BancoInterHelper::applyReceivedChargesToInvoice($invoiceId, $paidMulta, $paidJuros, (int) $tx->id);
+
+    addInvoicePayment($invoiceId, $transId, $amount, $fee, $gatewayModule);
+    logTransaction($gatewayParams["name"], $event, "Successful");
+
+    $paidExtras = [];
+    if ($paidJuros >= 0.01) {
+        $paidExtras["paid_juros"] = $paidJuros;
+    }
+    if ($paidMulta >= 0.01) {
+        $paidExtras["paid_multa"] = $paidMulta;
     }
     if (($breakdown["desconto"] ?? null) !== null) {
         $paidExtras["paid_desconto"] = (float) $breakdown["desconto"];
