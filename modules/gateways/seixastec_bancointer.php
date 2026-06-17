@@ -39,7 +39,7 @@ function seixastec_bancointer_config(): array
             ->orderBy("fieldname")
             ->get(["id", "fieldname"]);
         foreach ($rows as $row) {
-            $customFieldOptions[$row->id] = sprintf("[%d] %s", $row->id, $row->fieldname);
+            $customFieldOptions[$row->id] = (string) $row->fieldname;
         }
     } catch (Throwable $e) {
         // Ignore reduced-schema environments during bootstrap.
@@ -151,13 +151,13 @@ function seixastec_bancointer_config(): array
                         // Default option: value empty string, nice label. Using = separator so WHMCS treats as one spec " =Usar..."
                         $pairs[] = "=" . $clean;
                     } else {
-                        // Real custom field: "1=[1] CPF/CNPJ"
+                        // Real custom field: "1=CPF/CNPJ"
                         $pairs[] = $val . "=" . $clean;
                     }
                 }
                 return implode(",", $pairs);
             })($customFieldOptions),
-            "Description" => "Selecione o custom field de cliente que contém o CPF/CNPJ do pagador. Se a opção 'usar Tax ID padrão' estiver selecionada (ou nenhum valor), usa o Tax ID do cliente no WHMCS.",
+            "Description" => "Selecione o campo personalizado do cliente que contém o CPF/CNPJ (ex.: CPF/CNPJ). Se 'usar Tax ID do cliente' estiver selecionado, usa o Tax ID padrão do WHMCS.",
         ],
         // Tools panel (webhook, extrato, métricas, logs) — agora separado das regras operacionais (que estão nos campos acima).
         // Type=none força a exibição logo após as regras. Usa minimal=1 para não repetir header dentro do iframe.
@@ -599,13 +599,32 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         throw new RuntimeException("Cliente {$userId} não encontrado.");
     }
 
-    $customFieldId = $params["cpf_cnpj_field"] ?? null;
-    $customFieldValid = !empty($customFieldId) && ctype_digit((string) $customFieldId);
-    $digits = BancoInterHelper::resolveClientDocument($userId, $customFieldId);
+    $customFieldRaw = $params["cpf_cnpj_field"] ?? null;
+    $customFieldId = BancoInterHelper::normalizeCustomFieldId(
+        is_scalar($customFieldRaw) ? (string) $customFieldRaw : null
+    );
+    $digits = BancoInterHelper::resolveClientDocument($userId, is_scalar($customFieldRaw) ? (string) $customFieldRaw : null);
     if ($digits === "" || (strlen($digits) !== 11 && strlen($digits) !== 14)) {
-        $source = $customFieldValid
-            ? "custom field #{$customFieldId} (+ fallback tblclients.tax_id)"
-            : "tblclients.tax_id (cpf_cnpj_field ignorado: '" . mb_substr((string) $customFieldId, 0, 20) . "...')";
+        if ($customFieldId !== null && $customFieldId > 0) {
+            $fieldName = Capsule::table("tblcustomfields")->where("id", $customFieldId)->value("fieldname");
+            $source = sprintf(
+                "custom field #%d (%s) (+ fallback tblclients.tax_id)",
+                $customFieldId,
+                $fieldName ?: "CPF/CNPJ"
+            );
+            if (
+                is_scalar($customFieldRaw)
+                && trim((string) $customFieldRaw) !== ""
+                && !ctype_digit((string) $customFieldRaw)
+            ) {
+                $source .= " [valor legado normalizado de '" . mb_substr((string) $customFieldRaw, 0, 24) . "']";
+            }
+        } else {
+            $ignored = is_scalar($customFieldRaw) ? trim((string) $customFieldRaw) : "";
+            $source = $ignored !== ""
+                ? "tblclients.tax_id (cpf_cnpj_field inválido: '" . mb_substr($ignored, 0, 24) . "')"
+                : "tblclients.tax_id (nenhum custom field CPF/CNPJ configurado)";
+        }
         throw new RuntimeException(sprintf(
             "CPF/CNPJ do cliente %d inválido ou vazio (fonte: %s, %d dígitos obtidos; esperado 11 ou 14).",
             $userId,

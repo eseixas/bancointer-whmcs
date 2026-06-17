@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-06-16
+
+### Fixed
+- **CPF/CNPJ com valor legado no dropdown**: `normalizeCustomFieldId()` aceita configurações antigas salvas como `1=[1] CPF/CNPJ` e resolve o custom field correto antes do fallback para `tblclients.tax_id`.
+- Mensagens de erro em `generateForInvoice` agora citam o ID normalizado e o nome do campo (ex.: `custom field #1 (CPF/CNPJ)`).
+
+### Changed
+- Dropdown **Origem do CPF/CNPJ** exibe o nome do custom field (ex.: `CPF/CNPJ`) em vez de `[1] CPF/CNPJ`.
+
 ## [1.5.0] - 2026-06-16
 
 ### Changed

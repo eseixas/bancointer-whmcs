@@ -278,6 +278,36 @@ class BancoInterHelper
     }
 
     /**
+     * Normalize gateway setting cpf_cnpj_field to a numeric custom field ID.
+     * WHMCS may persist legacy dropdown values such as "1=[1] CPF/CNPJ".
+     */
+    public static function normalizeCustomFieldId(?string $raw): ?int
+    {
+        $raw = trim((string) $raw);
+        if ($raw === "" || $raw === "0") {
+            return null;
+        }
+
+        if (ctype_digit($raw)) {
+            return (int) $raw;
+        }
+
+        if (preg_match('/^\[(\d+)\]/', $raw, $matches)) {
+            return (int) $matches[1];
+        }
+
+        if (preg_match('/^(\d+)\s*=/', $raw, $matches)) {
+            return (int) $matches[1];
+        }
+
+        if (preg_match('/^(\d+)\b/', $raw, $matches)) {
+            return (int) $matches[1];
+        }
+
+        return null;
+    }
+
+    /**
      * Resolve the invoice client's CPF/CNPJ from the configured custom field.
      * Falls back to the client tax_id when the custom field is empty.
      */
@@ -285,10 +315,10 @@ class BancoInterHelper
     {
         $digits = "";
 
-        // Defesa: só aceita IDs numéricos. Valores corrompidos (hash, string) caem no fallback.
-        if (!empty($customFieldId) && ctype_digit((string) $customFieldId)) {
+        $fieldId = self::normalizeCustomFieldId($customFieldId);
+        if ($fieldId !== null && $fieldId > 0) {
             $row = Capsule::table("tblcustomfieldsvalues")
-                ->where("fieldid", (int) $customFieldId)
+                ->where("fieldid", $fieldId)
                 ->where("relid", $userId)
                 ->first();
             if ($row && !empty($row->value)) {
