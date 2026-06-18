@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-06-18
+
+### Fixed
+- **Data de vencimento (dataVencimento) não respeitada**: Boleto gerado com vencimento igual à data de emissão (ex.: dia 17) mesmo quando a fatura tinha `duedate` definido para data futura (ex.: dia 24).
+  - Causa: no caminho de geração automática ao visualizar a fatura (`seixastec_bancointer_link`), o código caía no fallback `date("Y-m-d")` quando `$params["duedate"]` não estava presente.
+  - Agora `generateForInvoice` sempre prioriza o valor atual de `tblinvoices.duedate` como fonte autoritativa antes de montar o payload para a API do Banco Inter.
+  - Adicionado log `generate.due_date_resolved` (Module Logs) com `due_date` + `source` para facilitar diagnóstico futuro.
+- Consistência: auto-generate via visualização de fatura agora consulta a fatura diretamente (como os hooks e generate.php).
+
 ## [1.5.1] - 2026-06-16
 
 ### Fixed

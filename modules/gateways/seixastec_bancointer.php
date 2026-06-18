@@ -182,12 +182,16 @@ function seixastec_bancointer_link(array $params): string
     if (!$tx || in_array(strtoupper((string) $tx->status), BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
         if (!empty($params["auto_generate"]) && $params["auto_generate"] === "on") {
             try {
-                $userId = (int) $params["clientdetails"]["userid"];
-                $amount = (float) $params["amount"];
-                // Tentamos obter dueDate real pela API interna do WHMCS ou no fallback
-                $dueDate = !empty($params["duedate"]) ? $params["duedate"] : date("Y-m-d");
-                
-                $row = seixastec_bancointer_generateForInvoice($invoiceId, $userId, $amount, $dueDate, $params);
+                // Buscar dados básicos da fatura; o due date autoritativo é resolvido dentro de generateForInvoice
+                // a partir de tblinvoices.duedate para garantir que o vencimento definido seja sempre respeitado.
+                $invoice = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+                if (!$invoice) {
+                    throw new RuntimeException("Fatura não encontrada para geração automática.");
+                }
+                $userId = (int) $invoice->userid;
+                $amount = (float) $invoice->total;
+
+                $row = seixastec_bancointer_generateForInvoice($invoiceId, $userId, $amount, (string)($invoice->duedate ?? ""), $params);
                 $tx = (object) $row;
             } catch (Throwable $e) {
                 BancoInterHelper::log("invoice.auto_generate_failed", ["invoiceid" => $invoiceId], $e->getMessage());
@@ -561,9 +565,24 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         ));
     }
 
-    $dueDate = $dueDate && $dueDate !== "0000-00-00"
-        ? date("Y-m-d", strtotime($dueDate))
-        : date("Y-m-d", strtotime("+3 days"));
+    // Autoritative duedate: sempre priorizar o valor atual em tblinvoices.duedate.
+    // Isso garante que o "vencimento definido" na fatura do WHMCS seja respeitado,
+    // independentemente do que o chamador passou (params de link, hook timing etc).
+    $invRow = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+    if ($invRow && !empty($invRow->duedate) && $invRow->duedate !== "0000-00-00") {
+        $dueDate = (string) $invRow->duedate;
+    } elseif (!$dueDate || $dueDate === "0000-00-00") {
+        $dueDate = date("Y-m-d", strtotime("+3 days"));
+    }
+
+    $dueDate = date("Y-m-d", strtotime($dueDate));
+
+    $source = ($invRow && !empty($invRow->duedate) && $invRow->duedate !== "0000-00-00") ? "tblinvoices.duedate" : "fallback_plus_3_days";
+    BancoInterHelper::log("generate.due_date_resolved", [
+        "invoice_id" => $invoiceId,
+        "due_date" => $dueDate,
+        "source" => $source,
+    ], "duedate used for dataVencimento");
 
     $existing = BancoInterHelper::findActiveByInvoice($invoiceId);
     if ($existing && BancoInterHelper::isReusableStatus($existing->status)) {
