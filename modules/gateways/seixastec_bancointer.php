@@ -39,7 +39,7 @@ function seixastec_bancointer_config(): array
             ->orderBy("fieldname")
             ->get(["id", "fieldname"]);
         foreach ($rows as $row) {
-            $customFieldOptions[$row->id] = sprintf("[%d] %s", $row->id, $row->fieldname);
+            $customFieldOptions[$row->id] = (string) $row->fieldname;
         }
     } catch (Throwable $e) {
         // Ignore reduced-schema environments during bootstrap.
@@ -54,6 +54,7 @@ function seixastec_bancointer_config(): array
     $richPanel = '<div style="margin:16px 0 8px;padding:0;border:1px solid #e6d9a8;border-radius:5px;overflow:hidden;">'
         . '<div style="background:#fff8e1;padding:10px 14px;border-bottom:1px solid #f0d58a;color:#664e00;font-size:13px;line-height:1.45;">'
         . '<strong>INFO:</strong> Regras operacionais (multa, juros, descontos, geração automática, dias para baixa, origem do CPF/CNPJ) são configuradas nos campos acima e salvas normalmente. '
+        . 'Multa/juros do boleto são calculados pelo Banco Inter; o WHMCS só registra esses valores no ledger após o pagamento (late fees nativas do WHMCS são ignoradas neste gateway). '
         . 'Abaixo estão as ferramentas administrativas (webhook, extrato, métricas, logs).'
         . '</div>'
         . '<iframe name="bi-panel-iframe" src="' . $safeEmbed . '" style="width:100%;height:680px;border:0;border-top:1px solid #e6d9a8;background:#fff;display:block;"></iframe>'
@@ -150,13 +151,13 @@ function seixastec_bancointer_config(): array
                         // Default option: value empty string, nice label. Using = separator so WHMCS treats as one spec " =Usar..."
                         $pairs[] = "=" . $clean;
                     } else {
-                        // Real custom field: "1=[1] CPF/CNPJ"
+                        // Real custom field: "1=CPF/CNPJ"
                         $pairs[] = $val . "=" . $clean;
                     }
                 }
                 return implode(",", $pairs);
             })($customFieldOptions),
-            "Description" => "Selecione o custom field de cliente que contém o CPF/CNPJ do pagador. Se a opção 'usar Tax ID padrão' estiver selecionada (ou nenhum valor), usa o Tax ID do cliente no WHMCS.",
+            "Description" => "Selecione o campo personalizado do cliente que contém o CPF/CNPJ (ex.: CPF/CNPJ). Se 'usar Tax ID do cliente' estiver selecionado, usa o Tax ID padrão do WHMCS.",
         ],
         // Tools panel (webhook, extrato, métricas, logs) — agora separado das regras operacionais (que estão nos campos acima).
         // Type=none força a exibição logo após as regras. Usa minimal=1 para não repetir header dentro do iframe.
@@ -181,12 +182,16 @@ function seixastec_bancointer_link(array $params): string
     if (!$tx || in_array(strtoupper((string) $tx->status), BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
         if (!empty($params["auto_generate"]) && $params["auto_generate"] === "on") {
             try {
-                $userId = (int) $params["clientdetails"]["userid"];
-                $amount = (float) $params["amount"];
-                // Tentamos obter dueDate real pela API interna do WHMCS ou no fallback
-                $dueDate = !empty($params["duedate"]) ? $params["duedate"] : date("Y-m-d");
-                
-                $row = seixastec_bancointer_generateForInvoice($invoiceId, $userId, $amount, $dueDate, $params);
+                // Buscar dados básicos da fatura; o due date autoritativo é resolvido dentro de generateForInvoice
+                // a partir de tblinvoices.duedate para garantir que o vencimento definido seja sempre respeitado.
+                $invoice = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+                if (!$invoice) {
+                    throw new RuntimeException("Fatura não encontrada para geração automática.");
+                }
+                $userId = (int) $invoice->userid;
+                $amount = (float) $invoice->total;
+
+                $row = seixastec_bancointer_generateForInvoice($invoiceId, $userId, $amount, (string)($invoice->duedate ?? ""), $params);
                 $tx = (object) $row;
             } catch (Throwable $e) {
                 BancoInterHelper::log("invoice.auto_generate_failed", ["invoiceid" => $invoiceId], $e->getMessage());
@@ -560,9 +565,24 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         ));
     }
 
-    $dueDate = $dueDate && $dueDate !== "0000-00-00"
-        ? date("Y-m-d", strtotime($dueDate))
-        : date("Y-m-d", strtotime("+3 days"));
+    // Autoritative duedate: sempre priorizar o valor atual em tblinvoices.duedate.
+    // Isso garante que o "vencimento definido" na fatura do WHMCS seja respeitado,
+    // independentemente do que o chamador passou (params de link, hook timing etc).
+    $invRow = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+    if ($invRow && !empty($invRow->duedate) && $invRow->duedate !== "0000-00-00") {
+        $dueDate = (string) $invRow->duedate;
+    } elseif (!$dueDate || $dueDate === "0000-00-00") {
+        $dueDate = date("Y-m-d", strtotime("+3 days"));
+    }
+
+    $dueDate = date("Y-m-d", strtotime($dueDate));
+
+    $source = ($invRow && !empty($invRow->duedate) && $invRow->duedate !== "0000-00-00") ? "tblinvoices.duedate" : "fallback_plus_3_days";
+    BancoInterHelper::log("generate.due_date_resolved", [
+        "invoice_id" => $invoiceId,
+        "due_date" => $dueDate,
+        "source" => $source,
+    ], "duedate used for dataVencimento");
 
     $existing = BancoInterHelper::findActiveByInvoice($invoiceId);
     if ($existing && BancoInterHelper::isReusableStatus($existing->status)) {
@@ -598,13 +618,32 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         throw new RuntimeException("Cliente {$userId} não encontrado.");
     }
 
-    $customFieldId = $params["cpf_cnpj_field"] ?? null;
-    $customFieldValid = !empty($customFieldId) && ctype_digit((string) $customFieldId);
-    $digits = BancoInterHelper::resolveClientDocument($userId, $customFieldId);
+    $customFieldRaw = $params["cpf_cnpj_field"] ?? null;
+    $customFieldId = BancoInterHelper::normalizeCustomFieldId(
+        is_scalar($customFieldRaw) ? (string) $customFieldRaw : null
+    );
+    $digits = BancoInterHelper::resolveClientDocument($userId, is_scalar($customFieldRaw) ? (string) $customFieldRaw : null);
     if ($digits === "" || (strlen($digits) !== 11 && strlen($digits) !== 14)) {
-        $source = $customFieldValid
-            ? "custom field #{$customFieldId} (+ fallback tblclients.tax_id)"
-            : "tblclients.tax_id (cpf_cnpj_field ignorado: '" . mb_substr((string) $customFieldId, 0, 20) . "...')";
+        if ($customFieldId !== null && $customFieldId > 0) {
+            $fieldName = Capsule::table("tblcustomfields")->where("id", $customFieldId)->value("fieldname");
+            $source = sprintf(
+                "custom field #%d (%s) (+ fallback tblclients.tax_id)",
+                $customFieldId,
+                $fieldName ?: "CPF/CNPJ"
+            );
+            if (
+                is_scalar($customFieldRaw)
+                && trim((string) $customFieldRaw) !== ""
+                && !ctype_digit((string) $customFieldRaw)
+            ) {
+                $source .= " [valor legado normalizado de '" . mb_substr((string) $customFieldRaw, 0, 24) . "']";
+            }
+        } else {
+            $ignored = is_scalar($customFieldRaw) ? trim((string) $customFieldRaw) : "";
+            $source = $ignored !== ""
+                ? "tblclients.tax_id (cpf_cnpj_field inválido: '" . mb_substr($ignored, 0, 24) . "')"
+                : "tblclients.tax_id (nenhum custom field CPF/CNPJ configurado)";
+        }
         throw new RuntimeException(sprintf(
             "CPF/CNPJ do cliente %d inválido ou vazio (fonte: %s, %d dígitos obtidos; esperado 11 ou 14).",
             $userId,

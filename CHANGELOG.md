@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-06-18
+
+### Fixed
+- **Data de vencimento (dataVencimento) não respeitada**: Boleto gerado com vencimento igual à data de emissão (ex.: dia 17) mesmo quando a fatura tinha `duedate` definido para data futura (ex.: dia 24).
+  - Causa: no caminho de geração automática ao visualizar a fatura (`seixastec_bancointer_link`), o código caía no fallback `date("Y-m-d")` quando `$params["duedate"]` não estava presente.
+  - Agora `generateForInvoice` sempre prioriza o valor atual de `tblinvoices.duedate` como fonte autoritativa antes de montar o payload para a API do Banco Inter.
+  - Adicionado log `generate.due_date_resolved` (Module Logs) com `due_date` + `source` para facilitar diagnóstico futuro.
+- Consistência: auto-generate via visualização de fatura agora consulta a fatura diretamente (como os hooks e generate.php).
+
+## [1.5.1] - 2026-06-16
+
+### Fixed
+- **CPF/CNPJ com valor legado no dropdown**: `normalizeCustomFieldId()` aceita configurações antigas salvas como `1=[1] CPF/CNPJ` e resolve o custom field correto antes do fallback para `tblclients.tax_id`.
+- Mensagens de erro em `generateForInvoice` agora citam o ID normalizado e o nome do campo (ex.: `custom field #1 (CPF/CNPJ)`).
+
+### Changed
+- Dropdown **Origem do CPF/CNPJ** exibe o nome do custom field (ex.: `CPF/CNPJ`) em vez de `[1] CPF/CNPJ`.
+
+## [1.5.0] - 2026-06-16
+
+### Changed
+- Multa e juros passam a ser cobrados **somente no boleto** (regras enviadas ao Banco Inter). O WHMCS não aplica mais late fees nativas em faturas com gateway `seixastec_bancointer`.
+- No webhook de pagamento, multa/juros recebidos do banco são registrados na fatura como itens `"Multa por atraso (Banco Inter)"` e `"Juros de mora (Banco Inter)"` **antes** de `addInvoicePayment()`, alinhando ledger e valor pago.
+- Cron diário remove late fees WHMCS remanescentes em faturas Banco Inter ainda não pagas (corrige faturas afetadas anteriormente, ex. ledger com Debit Note).
+
+### Added
+- Hook `includes/hooks/seixastec_bancointer_late_fees.php` (`AddInvoiceLateFee` + limpeza em `DailyCronJob`).
+- Coluna `charges_synced_at` em `mod_seixastec_bancointer_transactions` para idempotência na sincronização pós-pagamento.
+
 ## [1.4.9] - 2026-06-03 
 
 ### Fixed
