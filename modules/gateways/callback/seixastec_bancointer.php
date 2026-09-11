@@ -66,40 +66,47 @@ if (!is_array($payload)) {
 }
 
 // Banco Inter may send a single cobrança event, a batch, or Pix entries under "pix".
-$events = seixastec_bancointer_extractEvents($payload);
+$events = BancoInterHelper::extractWebhookEvents($payload);
 $api = seixastec_bancointer_buildApi($gatewayParams);
 
 $processed = 0;
+$needsRetry = false;
 foreach ($events as $event) {
     try {
-        if (seixastec_bancointer_handleEvent($event, $gatewayParams, $api, $gatewayModule)) {
+        $result = seixastec_bancointer_handleEvent($event, $gatewayParams, $api, $gatewayModule);
+        if ($result === BancoInterHelper::SETTLE_APPLIED) {
             $processed++;
+        } elseif ($result === BancoInterHelper::SETTLE_RETRY) {
+            $needsRetry = true;
         }
     } catch (Throwable $e) {
         BancoInterHelper::log("webhook.error", $event, $e->getMessage());
+        $needsRetry = true;
     }
 }
 
-http_response_code(200);
+http_response_code($needsRetry ? 503 : 200);
 header("Content-Type: application/json");
-echo json_encode(["processed" => $processed, "received" => count($events)]);
+echo json_encode(["processed" => $processed, "received" => count($events), "retry" => $needsRetry]);
 
 /**
- * Route a single webhook event. Returns true when a payment was registered.
+ * Route a single webhook event.
+ *
+ * @return int BancoInterHelper::SETTLE_APPLIED|SETTLE_IGNORED|SETTLE_RETRY
  */
-function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, BancoInterAPI $api, string $gatewayModule): bool
+function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, BancoInterAPI $api, string $gatewayModule): int
 {
-    $codigo = seixastec_bancointer_firstValue($event, [
+    $codigo = BancoInterHelper::firstValue($event, [
         "codigoSolicitacao",
         "codigoTransacao",
         "cobranca.codigoSolicitacao",
     ]);
-    $nossoNumero = seixastec_bancointer_firstValue($event, [
+    $nossoNumero = BancoInterHelper::firstValue($event, [
         "nossoNumero",
         "boleto.nossoNumero",
         "cobranca.boleto.nossoNumero",
     ]);
-    $txid = seixastec_bancointer_firstValue($event, [
+    $txid = BancoInterHelper::firstValue($event, [
         "txid",
         "txId",
         "tx_id",
@@ -107,7 +114,7 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
         "pix.txId",
         "pix.tx_id",
     ]);
-    $e2e = seixastec_bancointer_firstValue($event, [
+    $e2e = BancoInterHelper::firstValue($event, [
         "endToEndId",
         "endToEndID",
         "e2eId",
@@ -117,13 +124,13 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
         "pix.e2eId",
         "pix.e2e_id",
     ]);
-    $seuNumero = seixastec_bancointer_firstValue($event, [
+    $seuNumero = BancoInterHelper::firstValue($event, [
         "seuNumero",
         "seu_numero",
         "cobranca.seuNumero",
     ]);
 
-    $situacao = strtoupper((string) seixastec_bancointer_firstValue($event, [
+    $situacao = strtoupper((string) BancoInterHelper::firstValue($event, [
         "situacao",
         "status",
         "cobranca.situacao",
@@ -132,7 +139,7 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
 
     if (!$codigo && !$nossoNumero && !$txid && !$e2e && !$seuNumero) {
         BancoInterHelper::log("webhook.missing_identifier", $event, "payload sem codigoSolicitacao, nossoNumero, txid, endToEndId ou seuNumero");
-        return false;
+        return BancoInterHelper::SETTLE_IGNORED;
     }
 
     $tx = null;
@@ -161,233 +168,34 @@ function seixastec_bancointer_handleEvent(array $event, array $gatewayParams, Ba
             "e2e_id" => $e2e,
             "seu_numero" => $seuNumero,
         ]);
-        return false;
+        return BancoInterHelper::SETTLE_IGNORED;
     }
 
-    // Keep the latest remote state persisted even for non-terminal updates.
+    if (BancoInterHelper::isLocallyPaid($tx)) {
+        BancoInterHelper::log("webhook.already_paid", $event, [
+            "invoice_id" => (int) $tx->invoice_id,
+            "status" => $tx->status ?? null,
+        ]);
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    $statusUpdate = $situacao;
+    if ($statusUpdate !== "" && BancoInterHelper::isPaidStatus($statusUpdate)) {
+        // Do not persist a paid status from the webhook body; settleFromRemote
+        // confirms RECEBIDO via GET /cobrancas before crediting the invoice.
+        $statusUpdate = (string) ($tx->status ?? "");
+    }
+
     BancoInterHelper::saveTransaction([
         "invoice_id" => (int) $tx->invoice_id,
         "codigo_solicitacao" => $tx->codigo_solicitacao,
-        "status" => $situacao ?: $tx->status,
+        "status" => $statusUpdate !== "" ? $statusUpdate : $tx->status,
         "txid" => $txid ?: $tx->txid,
         "e2e_id" => $e2e ?: $tx->e2e_id,
         "raw_response" => json_encode($event, JSON_UNESCAPED_UNICODE),
     ]);
 
-    $invoiceId = (int) $tx->invoice_id;
-    $remote = null;
-    if (!empty($tx->codigo_solicitacao)) {
-        try {
-            $remote = $api->getCollection($tx->codigo_solicitacao);
-        } catch (Throwable $e) {
-            BancoInterHelper::log("webhook.api_verify_failed", $event, $e->getMessage());
-        }
-    }
+    $tx = BancoInterHelper::findByInvoice((int) $tx->invoice_id) ?: $tx;
 
-    $eventAmount = seixastec_bancointer_amountFrom($event);
-    $remoteStatus = $remote !== null ? strtoupper((string) ($remote["situacao"] ?? "")) : "";
-    $eventSaysPaid = BancoInterHelper::isPaidStatus($situacao)
-        || seixastec_bancointer_hasPaidTimestamp($event)
-        || (($e2e || $txid) && $eventAmount !== null && $eventAmount > 0);
-    $remoteSaysPaid = BancoInterHelper::isPaidStatus($remoteStatus);
-
-    if ($remote !== null) {
-        if ($remoteStatus !== "" && in_array($remoteStatus, BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
-            BancoInterHelper::log("webhook.rejected_status", $event, [
-                "local_status" => $situacao,
-                "remote_status" => $remoteStatus,
-            ]);
-            return false;
-        }
-    }
-
-    if (!$eventSaysPaid && !$remoteSaysPaid) {
-        BancoInterHelper::log("webhook.status_not_paid", $event, [
-            "local_status" => $situacao,
-            "remote_status" => $remoteStatus,
-            "has_paid_timestamp" => seixastec_bancointer_hasPaidTimestamp($event),
-            "event_amount" => $eventAmount,
-        ]);
-        return false;
-    }
-
-    $remoteAmount = is_array($remote) ? seixastec_bancointer_amountFrom($remote) : null;
-    $amount = (float) ($remoteAmount ?? $eventAmount ?? $tx->amount);
-
-    if ($amount <= 0) {
-        BancoInterHelper::log("webhook.rejected_amount", $event, "paid amount missing or zero");
-        return false;
-    }
-
-    // Aceita qualquer valor >= nominal (multa/juros aumentam o recebimento em pagamentos atrasados).
-    // Rejeita apenas se o valor recebido for menor que o nominal (pagamento parcial).
-    if ($tx->amount !== null && $amount < (float) $tx->amount - 0.01) {
-        BancoInterHelper::log("webhook.rejected_amount_mismatch", $event, [
-            "expected" => (float) $tx->amount,
-            "received" => $amount,
-        ]);
-        return false;
-    }
-
-    $fee = (float) (seixastec_bancointer_firstValue($event, ["valorTarifa", "tarifa", "pix.valorTarifa"]) ?? 0);
-    $transId = $e2e
-        ?: ($txid
-        ?: ($remote["pix"]["endToEndId"] ?? ($remote["pix"]["txid"] ?? ($codigo ?: ($nossoNumero ?: (string) $tx->codigo_solicitacao)))));
-
-    $existing = checkCbTransID($transId);
-    if ($existing) {
-        // Duplicate delivery — acknowledge without re-crediting the invoice.
-        BancoInterHelper::log("webhook.duplicate_transaction", $event, ["trans_id" => $transId]);
-        return false;
-    }
-
-    $checkInvoice = checkCbInvoiceID($invoiceId, $gatewayParams["name"]);
-    if (!$checkInvoice) {
-        BancoInterHelper::log("webhook.rejected_invoice", $event, ["invoice_id" => $invoiceId]);
-        return false;
-    }
-
-    // Capture any explicit breakdown of juros/multa/desconto from the settlement payload.
-    $breakdown = BancoInterHelper::parsePaymentBreakdown($event);
-    if (is_array($remote)) {
-        $remoteBreak = BancoInterHelper::parsePaymentBreakdown($remote);
-        foreach ($remoteBreak as $k => $v) {
-            if ($v !== null) {
-                $breakdown[$k] = $v;
-            }
-        }
-    }
-
-    $paidMulta = ($breakdown["multa"] ?? null) !== null ? round((float) $breakdown["multa"], 2) : 0.0;
-    $paidJuros = ($breakdown["juros"] ?? null) !== null ? round((float) $breakdown["juros"], 2) : 0.0;
-
-    if ($paidMulta < 0.01 && $paidJuros < 0.01 && $tx->amount !== null) {
-        $nominal = round((float) $tx->amount, 2);
-        $extra = round(max(0, $amount - $nominal), 2);
-        if ($extra >= 0.01) {
-            $paidJuros = $extra;
-            BancoInterHelper::log("webhook.charges_estimated", [
-                "invoice_id" => $invoiceId,
-                "nominal" => $nominal,
-                "received" => $amount,
-            ], ["estimated_juros" => $extra]);
-        }
-    }
-
-    BancoInterHelper::removeWhmcsLateFeeEntries($invoiceId);
-    BancoInterHelper::applyReceivedChargesToInvoice($invoiceId, $paidMulta, $paidJuros, (int) $tx->id);
-
-    addInvoicePayment($invoiceId, $transId, $amount, $fee, $gatewayModule);
-    logTransaction($gatewayParams["name"], $event, "Successful");
-
-    $paidExtras = [];
-    if ($paidJuros >= 0.01) {
-        $paidExtras["paid_juros"] = $paidJuros;
-    }
-    if ($paidMulta >= 0.01) {
-        $paidExtras["paid_multa"] = $paidMulta;
-    }
-    if (($breakdown["desconto"] ?? null) !== null) {
-        $paidExtras["paid_desconto"] = (float) $breakdown["desconto"];
-    }
-
-    BancoInterHelper::markPaid((int) $tx->id, $amount, seixastec_bancointer_paidAt($event));
-
-    if ($paidExtras) {
-        BancoInterHelper::saveTransaction(array_merge(
-            ["id" => (int) $tx->id, "invoice_id" => $invoiceId],
-            $paidExtras
-        ));
-        BancoInterHelper::log("webhook.payment_breakdown", [
-            "invoice_id" => $invoiceId,
-            "codigo_solicitacao" => $tx->codigo_solicitacao,
-        ], $breakdown);
-    }
-
-    return true;
-}
-
-function seixastec_bancointer_extractEvents(array $payload): array
-{
-    if (isset($payload[0]) && is_array($payload[0])) {
-        return $payload;
-    }
-
-    foreach (["pix", "eventos", "cobrancas", "items"] as $key) {
-        if (!empty($payload[$key]) && is_array($payload[$key])) {
-            $items = isset($payload[$key][0]) ? $payload[$key] : [$payload[$key]];
-            return array_map(function ($item) use ($payload, $key) {
-                return is_array($item) ? array_merge($payload, [$key => $item], $item) : $payload;
-            }, $items);
-        }
-    }
-
-    return [$payload];
-}
-
-function seixastec_bancointer_firstValue(array $payload, array $paths)
-{
-    foreach ($paths as $path) {
-        $value = $payload;
-        foreach (explode(".", $path) as $segment) {
-            if (!is_array($value) || !array_key_exists($segment, $value)) {
-                $value = null;
-                break;
-            }
-            $value = $value[$segment];
-        }
-        if ($value !== null && $value !== "") {
-            return is_scalar($value) ? $value : null;
-        }
-    }
-
-    return null;
-}
-
-function seixastec_bancointer_amountFrom(array $payload): ?float
-{
-    $value = seixastec_bancointer_firstValue($payload, [
-        "valorTotalRecebimento",
-        "valorPago",
-        "valorRecebido",
-        "valor",
-        "amount",
-        "pix.valor",
-        "pix.valorPago",
-        "pix.amount",
-    ]);
-
-    if ($value === null) {
-        return null;
-    }
-
-    $normalized = trim((string) $value);
-    $normalized = preg_replace("/\s+/", "", $normalized);
-    if (strpos($normalized, ",") !== false) {
-        $normalized = str_replace(".", "", $normalized);
-        $normalized = str_replace(",", ".", $normalized);
-    } else {
-        $normalized = str_replace(",", "", $normalized);
-    }
-
-    return is_numeric($normalized) ? (float) $normalized : null;
-}
-
-function seixastec_bancointer_hasPaidTimestamp(array $payload): bool
-{
-    return seixastec_bancointer_paidAt($payload) !== null;
-}
-
-function seixastec_bancointer_paidAt(array $payload): ?string
-{
-    $paidAt = seixastec_bancointer_firstValue($payload, [
-        "dataHoraPagamento",
-        "dataPagamento",
-        "paidAt",
-        "pix.dataHoraPagamento",
-        "pix.dataPagamento",
-        "pix.paidAt",
-    ]);
-
-    return $paidAt !== null ? (string) $paidAt : null;
+    return seixastec_bancointer_settleFromRemote($tx, $gatewayParams, $api, $gatewayModule, $event);
 }

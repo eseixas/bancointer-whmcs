@@ -20,6 +20,9 @@ class BancoInterHelper
     public const GATEWAY_MODULE = "seixastec_bancointer";
     public const CHARGE_DESC_MULTA = "Multa por atraso (Banco Inter)";
     public const CHARGE_DESC_JUROS = "Juros de mora (Banco Inter)";
+    public const SETTLE_APPLIED = 1;
+    public const SETTLE_IGNORED = 0;
+    public const SETTLE_RETRY = -1;
     // Local synonyms (PENDING/CREATED/PROCESSING) + situações reais da API cobrança v3 do Inter.
     private const NON_TERMINAL_STATUSES = ["PENDING", "CREATED", "PROCESSING", "A_RECEBER", "EM_PROCESSAMENTO", "ATRASADO", "VENCIDO"];
     public const TERMINAL_CANCELLED_STATUSES = ["CANCELLED", "EXPIRED", "CANCELADO", "EXPIRADO"];
@@ -200,9 +203,11 @@ class BancoInterHelper
         self::ensureSchema();
 
         $row = Capsule::table(self::TABLE)
-            ->where("txid", $txid)
-            ->orWhere("e2e_id", $txid)
-            ->orWhere("nosso_numero", $txid)
+            ->where(function ($query) use ($txid) {
+                $query->where("txid", $txid)
+                    ->orWhere("e2e_id", $txid)
+                    ->orWhere("nosso_numero", $txid);
+            })
             ->first();
 
         return $row ?: null;
@@ -535,6 +540,188 @@ class BancoInterHelper
     public static function isReusableStatus(?string $status): bool
     {
         return in_array(strtoupper((string) $status), self::NON_TERMINAL_STATUSES, true);
+    }
+
+    public static function isLocallyPaid(?object $tx): bool
+    {
+        if (!$tx) {
+            return false;
+        }
+
+        return self::isPaidStatus($tx->status ?? null)
+            || !empty($tx->paid_at)
+            || (float) ($tx->paid_amount ?? 0) > 0;
+    }
+
+    public static function isCompletedRefundStatus(?string $status): bool
+    {
+        return in_array(strtoupper((string) $status), [
+            "DEVOLVIDO",
+            "SUCCESS",
+            "CONCLUIDA",
+            "CONCLUIDO",
+            "REALIZADO",
+        ], true);
+    }
+
+    /**
+     * Stable WHMCS transaction id: endToEndId, then PIX txid, then codigoSolicitacao.
+     */
+    public static function canonicalTransId(
+        ?string $e2e = null,
+        ?string $txid = null,
+        ?string $codigo = null,
+        ?string $nossoNumero = null
+    ): string {
+        foreach ([$e2e, $txid, $codigo, $nossoNumero] as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== "") {
+                return $value;
+            }
+        }
+
+        return "";
+    }
+
+    /** Deterministic PIX refund id (max 35 chars). Same invoice + endToEndId always yields the same id. */
+    public static function refundId(int $invoiceId, string $endToEndId): string
+    {
+        $hash = substr(hash("sha256", $invoiceId . "|" . $endToEndId), 0, 16);
+        return substr("whmcs" . $invoiceId . $hash, 0, 35);
+    }
+
+    /**
+     * @param list<string|null> $candidates
+     */
+    public static function findExistingPaymentTransId(array $candidates): ?string
+    {
+        $ids = [];
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== "") {
+                $ids[$value] = $value;
+            }
+        }
+        $ids = array_values($ids);
+        if ($ids === [] || !Capsule::schema()->hasTable("tblaccounts")) {
+            return null;
+        }
+
+        $found = Capsule::table("tblaccounts")
+            ->whereIn("transid", $ids)
+            ->value("transid");
+
+        return $found ? (string) $found : null;
+    }
+
+    /**
+     * MySQL named lock so invoice view, email hook and generate.php cannot emit two cobrancas.
+     *
+     * @template T
+     * @param callable(): T $callback
+     * @return T
+     */
+    public static function withInvoiceLock(int $invoiceId, callable $callback)
+    {
+        $lockName = "seixastec_bi_" . $invoiceId;
+        $rows = Capsule::connection()->select("SELECT GET_LOCK(?, 15) AS acquired", [$lockName]);
+        $acquired = isset($rows[0]) && (int) $rows[0]->acquired === 1;
+        if (!$acquired) {
+            throw new RuntimeException(
+                "Não foi possível obter lock para a fatura #{$invoiceId}. Tente novamente."
+            );
+        }
+
+        try {
+            return $callback();
+        } finally {
+            Capsule::connection()->select("SELECT RELEASE_LOCK(?)", [$lockName]);
+        }
+    }
+
+    public static function firstValue(array $payload, array $paths)
+    {
+        foreach ($paths as $path) {
+            $value = $payload;
+            foreach (explode(".", $path) as $segment) {
+                if (!is_array($value) || !array_key_exists($segment, $value)) {
+                    $value = null;
+                    break;
+                }
+                $value = $value[$segment];
+            }
+            if ($value !== null && $value !== "") {
+                return is_scalar($value) ? $value : null;
+            }
+        }
+
+        return null;
+    }
+
+    public static function amountFrom(array $payload): ?float
+    {
+        $value = self::firstValue($payload, [
+            "valorTotalRecebimento",
+            "valorPago",
+            "valorRecebido",
+            "valor",
+            "amount",
+            "pix.valor",
+            "pix.valorPago",
+            "pix.amount",
+        ]);
+
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+        $normalized = preg_replace("/\s+/", "", $normalized);
+        if (strpos($normalized, ",") !== false) {
+            $normalized = str_replace(".", "", $normalized);
+            $normalized = str_replace(",", ".", $normalized);
+        } else {
+            $normalized = str_replace(",", "", $normalized);
+        }
+
+        return is_numeric($normalized) ? (float) $normalized : null;
+    }
+
+    public static function paidAt(array $payload): ?string
+    {
+        $paidAt = self::firstValue($payload, [
+            "dataHoraPagamento",
+            "dataPagamento",
+            "paidAt",
+            "pix.dataHoraPagamento",
+            "pix.dataPagamento",
+            "pix.paidAt",
+        ]);
+
+        return $paidAt !== null ? (string) $paidAt : null;
+    }
+
+    public static function hasPaidTimestamp(array $payload): bool
+    {
+        return self::paidAt($payload) !== null;
+    }
+
+    public static function extractWebhookEvents(array $payload): array
+    {
+        if (isset($payload[0]) && is_array($payload[0])) {
+            return $payload;
+        }
+
+        foreach (["pix", "eventos", "cobrancas", "items"] as $key) {
+            if (!empty($payload[$key]) && is_array($payload[$key])) {
+                $items = isset($payload[$key][0]) ? $payload[$key] : [$payload[$key]];
+                return array_map(function ($item) use ($payload, $key) {
+                    return is_array($item) ? array_merge($payload, [$key => $item], $item) : $payload;
+                }, $items);
+            }
+        }
+
+        return [$payload];
     }
 
     public static function issueCsrfToken(string $scope): string

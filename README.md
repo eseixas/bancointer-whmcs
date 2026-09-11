@@ -1,5 +1,7 @@
 # Banco Inter Boleto e PIX — WHMCS 9.0.1 Payment Gateway
 
+**Versão atual: 1.5.3**
+
 Módulo WHMCS para emissão de cobranças PIX + Boleto via API v3 do Banco Inter,
 com registro de webhook automático, anexo de PDF nos e-mails e baixa automática
 parametrizável.
@@ -19,6 +21,7 @@ modules/gateways/callback/seixastec_bancointer.php
 modules/addons/seixastec_bancointer_admin/seixastec_bancointer_admin.php
 includes/hooks/seixastec_bancointer_auto_generate.php
 includes/hooks/seixastec_bancointer_email_pdf.php
+includes/hooks/seixastec_bancointer_late_fees.php
 ```
 
 Em seguida ative o gateway em **Setup → Payments → Payment Gateways → All
@@ -111,9 +114,16 @@ Recomendado: deixar Late Fee global do WHMCS em **0** se todas as faturas usarem
 1. Cliente visualiza a fatura → `seixastec_bancointer_link()` mostra QR Code PIX + linha
    digitável + link de PDF.
 2. Se *Gerar automaticamente* estiver desligado, o cliente clica em
-   **Gerar Boleto + PIX** (handler `generate.php`).
-3. Banco Inter dispara webhook ao compensar → callback sincroniza multa/juros no ledger (se houver), chama `addInvoicePayment()` e marca a transação como `PAID`.
-4. Hook `DailyCronJob` cancela cobranças vencidas além de `dias_baixa` e remove late fees WHMCS remanescentes.
+   **Gerar Boleto + PIX** (handler `generate.php`). A emissão é serializada com
+   lock MySQL por fatura (evita duas cobranças se e-mail, cron e tela coincidirem).
+3. Banco Inter dispara webhook ao compensar. O callback **não credita só com o
+   payload**: confirma `RECEBIDO` / `MARCADO_RECEBIDO` via `GET /cobrancas`, usa
+   transId canônico (`endToEndId` → `txid` → `codigoSolicitacao`) e ignora
+   cobrança local já paga. Falha nessa confirmação responde **503** para o Inter
+   retentar.
+4. Hook `DailyCronJob` (1) reconcilia cobranças já pagas no banco mas ainda
+   Unpaid no WHMCS (webhook perdido), (2) cancela cobranças além de `dias_baixa`
+   e (3) o hook de late fees remove late fees WHMCS remanescentes.
 
 ## Refund PIX
 
@@ -121,9 +131,27 @@ O módulo implementa o refund nativo do WHMCS para pagamentos PIX que tenham
 `endToEndId` salvo no registro local. O admin pode solicitar devolução total ou
 parcial pelo formulário padrão de refund da transação no WHMCS.
 
+O `refund_id` enviado ao Inter é **determinístico** (`invoiceId` + `endToEndId`).
+Retry do WHMCS reutiliza o mesmo ID; se a devolução já está `DEVOLVIDO`, o
+módulo devolve sucesso sem uma segunda devolução.
+
 Para usar esta função, a integração do Banco Inter precisa ter os escopos
 `pix.write` e `pix.read` liberados. Transações antigas sem `endToEndId` são
 recusadas com instrução para devolução manual pelo Banco Inter.
+
+## Testes
+
+Sem PHPUnit:
+
+```bash
+php modules/gateways/seixastec_bancointer/tests/run.php
+```
+
+Com PHPUnit:
+
+```bash
+phpunit --configuration modules/gateways/seixastec_bancointer/tests/phpunit.xml
+```
 
 ## Logs
 
@@ -139,3 +167,11 @@ o nome `seixastec_bancointer` com credenciais mascaradas.
 - **PDF não anexa ao e-mail** — confirme se a fatura usa o gateway
   `seixastec_bancointer` e verifique o `logModuleCall` da tag
   `hook.email_pdf`.
+- **Fatura paga duas vezes** — a 1.5.3 ignora o segundo evento se a linha
+  local já está paga ou se `txid`/`endToEndId`/`codigoSolicitacao` já
+  existe em `tblaccounts`. Confira `settle.already_paid` /
+  `settle.duplicate_transaction` no Gateway Log.
+- **Webhook 503** — a API do Inter falhou na confirmação; o Inter deve
+  retentar. O cron diário também reconcilia pagamentos perdidos.
+- **Forms do painel abrem a página inteira no iframe** — o embed usa
+  `minimal=1`; a 1.5.3 passa esse flag para os forms de webhook.

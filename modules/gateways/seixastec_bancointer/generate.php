@@ -18,8 +18,8 @@ use WHMCS\Database\Capsule;
 require_once __DIR__ . "/../../../init.php";
 require_once __DIR__ . "/../seixastec_bancointer.php";
 
-$action   = (string) ($_REQUEST["action"] ?? "generate");
-$invoiceId = (int) ($_REQUEST["invoiceid"] ?? 0);
+$action   = (string) ($_POST["action"] ?? $_GET["action"] ?? "generate");
+$invoiceId = (int) ($_POST["invoiceid"] ?? $_GET["invoiceid"] ?? 0);
 
 // ── Binary endpoints (qr / pdf / qr_diag) ──────────────────────────────────
 // These must NOT instantiate WHMCS\ClientArea because initPage() may emit HTML
@@ -45,7 +45,12 @@ if (in_array($action, ["qr", "pdf", "qr_diag"], true)) {
 
     try {
         if ($action === "qr_diag") {
-            // Diagnóstico: reporta quais libs de QR estão disponíveis no runtime do WHMCS.
+            if ($adminId <= 0) {
+                http_response_code(403);
+                header("Content-Type: text/plain; charset=utf-8");
+                exit("Forbidden");
+            }
+
             header("Content-Type: text/plain; charset=utf-8");
             $checks = [
                 "Endroid\\QrCode\\Builder\\Builder (v4)" => class_exists("Endroid\\QrCode\\Builder\\Builder"),

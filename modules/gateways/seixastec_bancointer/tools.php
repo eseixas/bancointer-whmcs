@@ -141,7 +141,7 @@ foreach ($errors as $error) {
 
 switch ($view) {
     case "webhook":
-        bi_renderWebhookCard($params, $webhookState, $callbackUrl, $csrfToken);
+        bi_renderWebhookCard($params, $webhookState, $callbackUrl, $csrfToken, $isMinimal);
         break;
     case "extract":
         bi_renderExtractCard($extractRows, $systemUrl);
@@ -288,7 +288,7 @@ function bi_normalizeDateFilter($value): ?string
     return $value;
 }
 
-function bi_renderWebhookCard(array $params, array $state, string $callbackUrl, string $csrfToken): void
+function bi_renderWebhookCard(array $params, array $state, string $callbackUrl, string $csrfToken, bool $isMinimal = false): void
 {
     $createdAt = !empty($params["webhook_secret_created_at"]) ? date("d/m/Y H:i:s", strtotime((string) $params["webhook_secret_created_at"])) : "—";
     $frameTarget = $isMinimal ? ' target="bi-panel-iframe"' : '';

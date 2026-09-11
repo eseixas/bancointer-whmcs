@@ -434,7 +434,21 @@ function seixastec_bancointer_refund(array $params): array
             ]);
         }
 
-        $refundId = seixastec_bancointer_refundId($invoiceId, $transId);
+        $existingRefundId = trim((string) ($tx->refund_id ?? ""));
+        $existingRefundStatus = strtoupper((string) ($tx->refund_status ?? ""));
+        if ($existingRefundId !== "" && BancoInterHelper::isCompletedRefundStatus($existingRefundStatus)) {
+            $previous = json_decode((string) ($tx->refund_raw_response ?? ""), true);
+            return [
+                "status" => "success",
+                "rawdata" => is_array($previous) ? $previous : ["status" => $existingRefundStatus],
+                "transid" => $existingRefundId,
+                "fees" => 0,
+            ];
+        }
+
+        $refundId = $existingRefundId !== ""
+            ? $existingRefundId
+            : seixastec_bancointer_refundId($invoiceId, $endToEndId);
         $description = "Refund WHMCS invoice #{$invoiceId}";
         $response = seixastec_bancointer_buildApi($params)->refundPix(
             $endToEndId,
@@ -500,10 +514,264 @@ function seixastec_bancointer_refundError(string $message, array $rawData = []):
     ];
 }
 
-function seixastec_bancointer_refundId(int $invoiceId, string $transId): string
+function seixastec_bancointer_refundId(int $invoiceId, string $endToEndId): string
 {
-    $hash = substr(hash("sha256", $invoiceId . "|" . $transId . "|" . microtime(true) . "|" . random_int(1000, 9999)), 0, 16);
-    return substr("whmcs" . $invoiceId . $hash, 0, 35);
+    return BancoInterHelper::refundId($invoiceId, $endToEndId);
+}
+
+/**
+ * Confirm the cobranca is paid at Banco Inter and credit the WHMCS invoice.
+ * Never credits from the webhook payload alone.
+ *
+ * @return int BancoInterHelper::SETTLE_APPLIED|SETTLE_IGNORED|SETTLE_RETRY
+ */
+function seixastec_bancointer_settleFromRemote(
+    object $tx,
+    array $gatewayParams,
+    BancoInterAPI $api,
+    string $gatewayModule,
+    array $event = [],
+    ?array $remote = null
+): int {
+    $invoiceId = (int) $tx->invoice_id;
+
+    if (BancoInterHelper::isLocallyPaid($tx)) {
+        BancoInterHelper::log("settle.already_paid", ["invoice_id" => $invoiceId], "local transaction already paid");
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    if ($remote === null) {
+        if (empty($tx->codigo_solicitacao)) {
+            BancoInterHelper::log("settle.missing_codigo", ["invoice_id" => $invoiceId], "cannot verify remote collection");
+            return BancoInterHelper::SETTLE_IGNORED;
+        }
+
+        try {
+            $remote = $api->getCollection((string) $tx->codigo_solicitacao);
+        } catch (Throwable $e) {
+            BancoInterHelper::log("settle.api_verify_failed", [
+                "invoice_id" => $invoiceId,
+                "codigo_solicitacao" => $tx->codigo_solicitacao,
+            ], $e->getMessage());
+            return BancoInterHelper::SETTLE_RETRY;
+        }
+    }
+
+    $remoteStatus = strtoupper((string) ($remote["situacao"] ?? ""));
+    if ($remoteStatus !== "" && in_array($remoteStatus, BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
+        BancoInterHelper::saveTransaction([
+            "invoice_id" => $invoiceId,
+            "codigo_solicitacao" => $tx->codigo_solicitacao,
+            "status" => $remoteStatus,
+        ]);
+        BancoInterHelper::log("settle.rejected_status", $event, [
+            "remote_status" => $remoteStatus,
+        ]);
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    if (!BancoInterHelper::isPaidStatus($remoteStatus)) {
+        BancoInterHelper::log("settle.status_not_paid", $event, [
+            "remote_status" => $remoteStatus,
+        ]);
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    $eventAmount = $event !== [] ? BancoInterHelper::amountFrom($event) : null;
+    $remoteAmount = BancoInterHelper::amountFrom($remote);
+    $amount = (float) ($remoteAmount ?? $eventAmount ?? $tx->amount);
+
+    if ($amount <= 0) {
+        BancoInterHelper::log("settle.rejected_amount", $event, "paid amount missing or zero");
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    if ($tx->amount !== null && $amount < (float) $tx->amount - 0.01) {
+        BancoInterHelper::log("settle.rejected_amount_mismatch", $event, [
+            "expected" => (float) $tx->amount,
+            "received" => $amount,
+        ]);
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    $e2e = BancoInterHelper::firstValue($event, [
+        "endToEndId",
+        "endToEndID",
+        "e2eId",
+        "e2e_id",
+        "pix.endToEndId",
+        "pix.endToEndID",
+        "pix.e2eId",
+        "pix.e2e_id",
+    ]) ?: BancoInterHelper::firstValue($remote, [
+        "pix.endToEndId",
+        "pix.endToEndID",
+        "endToEndId",
+        "endToEndID",
+    ]);
+    $txid = BancoInterHelper::firstValue($event, [
+        "txid",
+        "txId",
+        "tx_id",
+        "pix.txid",
+        "pix.txId",
+        "pix.tx_id",
+    ]) ?: BancoInterHelper::firstValue($remote, [
+        "pix.txid",
+        "txid",
+    ]);
+    $codigo = (string) ($tx->codigo_solicitacao ?? "");
+    $nossoNumero = BancoInterHelper::firstValue($event, [
+        "nossoNumero",
+        "boleto.nossoNumero",
+        "cobranca.boleto.nossoNumero",
+    ]) ?: ($remote["boleto"]["nossoNumero"] ?? ($tx->nosso_numero ?? null));
+
+    $transId = BancoInterHelper::canonicalTransId(
+        $e2e !== null ? (string) $e2e : null,
+        $txid !== null ? (string) $txid : null,
+        $codigo,
+        $nossoNumero !== null ? (string) $nossoNumero : null
+    );
+    if ($transId === "") {
+        BancoInterHelper::log("settle.missing_trans_id", $event, "no stable transaction id");
+        return BancoInterHelper::SETTLE_IGNORED;
+    }
+
+    $candidates = [$e2e, $txid, $codigo, $nossoNumero, $transId];
+
+    return BancoInterHelper::withInvoiceLock($invoiceId, function () use (
+        $tx,
+        $invoiceId,
+        $gatewayParams,
+        $gatewayModule,
+        $event,
+        $remote,
+        $amount,
+        $e2e,
+        $txid,
+        $transId,
+        $candidates
+    ): int {
+        $fresh = BancoInterHelper::findByInvoice($invoiceId) ?: $tx;
+        if (BancoInterHelper::isLocallyPaid($fresh)) {
+            BancoInterHelper::log("settle.already_paid", ["invoice_id" => $invoiceId], "local transaction already paid");
+            return BancoInterHelper::SETTLE_IGNORED;
+        }
+
+        if (BancoInterHelper::findExistingPaymentTransId($candidates)) {
+            BancoInterHelper::markPaid(
+                (int) $fresh->id,
+                $amount,
+                BancoInterHelper::paidAt($event) ?: BancoInterHelper::paidAt($remote)
+            );
+            BancoInterHelper::log("settle.duplicate_transaction", $event, ["trans_id" => $transId]);
+            return BancoInterHelper::SETTLE_IGNORED;
+        }
+
+        seixastec_bancointer_ensureInvoiceFunctions();
+
+        if ($event !== [] && function_exists("checkCbInvoiceID")) {
+            checkCbInvoiceID($invoiceId, $gatewayParams["name"] ?? $gatewayModule);
+        } elseif (!Capsule::table("tblinvoices")->where("id", $invoiceId)->exists()) {
+            BancoInterHelper::log("settle.rejected_invoice", $event, ["invoice_id" => $invoiceId]);
+            return BancoInterHelper::SETTLE_IGNORED;
+        }
+
+        $breakdown = BancoInterHelper::parsePaymentBreakdown($event);
+        $remoteBreak = BancoInterHelper::parsePaymentBreakdown($remote);
+        foreach ($remoteBreak as $k => $v) {
+            if ($v !== null) {
+                $breakdown[$k] = $v;
+            }
+        }
+
+        $paidMulta = ($breakdown["multa"] ?? null) !== null ? round((float) $breakdown["multa"], 2) : 0.0;
+        $paidJuros = ($breakdown["juros"] ?? null) !== null ? round((float) $breakdown["juros"], 2) : 0.0;
+
+        if ($paidMulta < 0.01 && $paidJuros < 0.01 && $fresh->amount !== null) {
+            $nominal = round((float) $fresh->amount, 2);
+            $extra = round(max(0, $amount - $nominal), 2);
+            if ($extra >= 0.01) {
+                $paidJuros = $extra;
+                BancoInterHelper::log("settle.charges_estimated", [
+                    "invoice_id" => $invoiceId,
+                    "nominal" => $nominal,
+                    "received" => $amount,
+                ], ["estimated_juros" => $extra]);
+            }
+        }
+
+        $fee = (float) (BancoInterHelper::firstValue($event, ["valorTarifa", "tarifa", "pix.valorTarifa"])
+            ?? BancoInterHelper::firstValue($remote, ["valorTarifa", "tarifa", "pix.valorTarifa"])
+            ?? 0);
+
+        BancoInterHelper::removeWhmcsLateFeeEntries($invoiceId);
+        BancoInterHelper::applyReceivedChargesToInvoice($invoiceId, $paidMulta, $paidJuros, (int) $fresh->id);
+
+        addInvoicePayment($invoiceId, $transId, $amount, $fee, $gatewayModule);
+        if (function_exists("logTransaction")) {
+            logTransaction($gatewayParams["name"] ?? $gatewayModule, $event !== [] ? $event : $remote, "Successful");
+        }
+
+        BancoInterHelper::saveTransaction([
+            "id" => (int) $fresh->id,
+            "invoice_id" => $invoiceId,
+            "codigo_solicitacao" => $fresh->codigo_solicitacao ?? null,
+            "txid" => $txid ?: ($fresh->txid ?? null),
+            "e2e_id" => $e2e ?: ($fresh->e2e_id ?? null),
+        ]);
+
+        BancoInterHelper::markPaid(
+            (int) $fresh->id,
+            $amount,
+            BancoInterHelper::paidAt($event) ?: BancoInterHelper::paidAt($remote)
+        );
+
+        $paidExtras = [];
+        if ($paidJuros >= 0.01) {
+            $paidExtras["paid_juros"] = $paidJuros;
+        }
+        if ($paidMulta >= 0.01) {
+            $paidExtras["paid_multa"] = $paidMulta;
+        }
+        if (($breakdown["desconto"] ?? null) !== null) {
+            $paidExtras["paid_desconto"] = (float) $breakdown["desconto"];
+        }
+        if ($paidExtras) {
+            BancoInterHelper::saveTransaction(array_merge(
+                ["id" => (int) $fresh->id, "invoice_id" => $invoiceId],
+                $paidExtras
+            ));
+            BancoInterHelper::log("settle.payment_breakdown", [
+                "invoice_id" => $invoiceId,
+                "codigo_solicitacao" => $fresh->codigo_solicitacao ?? null,
+            ], $breakdown);
+        }
+
+        return BancoInterHelper::SETTLE_APPLIED;
+    });
+}
+
+function seixastec_bancointer_ensureInvoiceFunctions(): void
+{
+    if (!defined("ROOTDIR")) {
+        return;
+    }
+
+    if (!function_exists("addInvoicePayment")) {
+        $path = ROOTDIR . "/includes/invoicefunctions.php";
+        if (is_file($path)) {
+            require_once $path;
+        }
+    }
+
+    if (!function_exists("logTransaction")) {
+        $path = ROOTDIR . "/includes/gatewayfunctions.php";
+        if (is_file($path)) {
+            require_once $path;
+        }
+    }
 }
 
 /* -------------------------------------------------- shared helpers
@@ -565,6 +833,7 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
         ));
     }
 
+    return BancoInterHelper::withInvoiceLock($invoiceId, function () use ($invoiceId, $userId, $amount, $dueDate, $params): array {
     // Autoritative duedate: sempre priorizar o valor atual em tblinvoices.duedate.
     // Isso garante que o "vencimento definido" na fatura do WHMCS seja respeitado,
     // independentemente do que o chamador passou (params de link, hook timing etc).
@@ -705,6 +974,7 @@ function seixastec_bancointer_generateForInvoice(int $invoiceId, int $userId, fl
     BancoInterHelper::saveTransaction($row);
 
     return $row;
+    });
 }
 
 function seixastec_bancointer_collectionRowFromResponse(int $invoiceId, array $response, array $extra = []): array

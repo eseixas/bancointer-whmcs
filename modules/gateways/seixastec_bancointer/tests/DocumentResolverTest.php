@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/helper.php';
 
 final class DocumentResolverTest extends TestCase

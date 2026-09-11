@@ -57,9 +57,8 @@ add_hook("InvoiceCreation", 1, function (array $vars) {
 });
 
 /**
- * DailyCronJob — cancels stale cobranças after the configured "dias_baixa"
- * window so the bank does not keep expired boletos active. Runs once per day
- * during the WHMCS cron pass.
+ * DailyCronJob — reconcile missed webhooks, then cancel cobrancas past
+ * the "dias_baixa" window. Overdue / oldest due dates are polled first.
  */
 add_hook("DailyCronJob", 1, function () {
     $params = seixastec_bancointer_loadParams();
@@ -73,7 +72,7 @@ add_hook("DailyCronJob", 1, function () {
     $candidates = Capsule::table(BancoInterHelper::TABLE)
         ->whereNotIn("status", array_merge(BancoInterHelper::TERMINAL_PAID_STATUSES, BancoInterHelper::TERMINAL_CANCELLED_STATUSES))
         ->whereNotNull("codigo_solicitacao")
-        ->where("due_date", "<=", $cutoff)
+        ->orderBy("due_date", "asc")
         ->limit(50)
         ->get();
 
@@ -85,13 +84,26 @@ add_hook("DailyCronJob", 1, function () {
 
     foreach ($candidates as $tx) {
         try {
-            // Verify live status before cancelling — a webhook may have failed to
-            // deliver a payment confirmation, leaving the local row as PENDING even
-            // though the cobrança was already settled at the bank.
             $live = $api->getCollection($tx->codigo_solicitacao);
             $liveStatus = strtoupper((string) ($live["situacao"] ?? ""));
 
-            // Sync any remote status change to the local row.
+            if (BancoInterHelper::isPaidStatus($liveStatus)) {
+                $result = seixastec_bancointer_settleFromRemote(
+                    $tx,
+                    $params,
+                    $api,
+                    BancoInterHelper::GATEWAY_MODULE,
+                    [],
+                    $live
+                );
+                BancoInterHelper::log("hook.cron_settle", [
+                    "invoice_id" => (int) $tx->invoice_id,
+                    "codigo_solicitacao" => $tx->codigo_solicitacao,
+                    "result" => $result,
+                ], $liveStatus);
+                continue;
+            }
+
             if ($liveStatus !== "") {
                 BancoInterHelper::saveTransaction([
                     "invoice_id" => (int) $tx->invoice_id,
@@ -100,11 +112,12 @@ add_hook("DailyCronJob", 1, function () {
                 ]);
             }
 
-            // Skip if already paid or already cancelled on the bank side.
-            if (BancoInterHelper::isPaidStatus($liveStatus)) {
+            if (in_array($liveStatus, BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
                 continue;
             }
-            if (in_array($liveStatus, BancoInterHelper::TERMINAL_CANCELLED_STATUSES, true)) {
+
+            $dueDate = (string) ($tx->due_date ?? "");
+            if ($dueDate === "" || $dueDate > $cutoff) {
                 continue;
             }
 

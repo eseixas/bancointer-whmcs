@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.3] - 2026-09-11
+
+### Fixed
+- **Webhook duplicava pagamento** quando o Inter reenviava o mesmo liquidação com `txid` numa entrega e `endToEndId` em outra. Agora o crédito exige confirmação via `GET /cobrancas` (`RECEBIDO`/`MARCADO_RECEBIDO`), usa um transId canônico (e2e → txid → codigoSolicitacao) e ignora cobrança local já paga / `tblaccounts` com qualquer um desses IDs.
+- Falha na API durante o webhook deixa de creditar “no chute”; responde **503** para o Inter retentar. Status `RECEBIDO` do payload **não** é gravado localmente antes da confirmação (evita pular o retry).
+- **Refund PIX** passou a usar ID determinístico (`invoiceId + endToEndId`) e reutiliza `refund_id` já persistido. Refunds `DEVOLVIDO` não disparam segunda devolução.
+- **Cron diário** reconcilia cobranças pagas no banco mas ainda Unpaid no WHMCS (webhook perdido) com a mesma rotina de liquidação do callback, e só então cancela boletos fora da janela de baixa.
+- Painel admin: `$isMinimal` agora é passado para `bi_renderWebhookCard`, restaurando `target="bi-panel-iframe"` nos forms do embed.
+- `generate.php?action=qr_diag` exige sessão de admin. `invoiceid`/`action` leem `$_POST`/`$_GET` em vez de `$_REQUEST`.
+- Emissão concorrente (fatura + e-mail + botão) serializada com `GET_LOCK` por `invoice_id`.
+- `findByTxid` agrupa os `orWhere` para não vazar o predicado se a query ganhar outros filtros.
+
+### Tests
+- Bootstrap define `WHMCS` para o PHPUnit. Novos testes de transId canônico, refund id, amountFrom, extração de eventos e `isLocallyPaid`. Runner sem PHPUnit: `php modules/gateways/seixastec_bancointer/tests/run.php`.
+
 ## [1.5.2] - 2026-06-18
 
 ### Fixed
