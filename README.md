@@ -1,6 +1,6 @@
 # Banco Inter Boleto e PIX — WHMCS 9.0.1 Payment Gateway
 
-**Versão atual: 1.5.3**
+**Versão atual: 1.5.4**
 
 Módulo WHMCS para emissão de cobranças PIX + Boleto via API v3 do Banco Inter,
 com registro de webhook automático, anexo de PDF nos e-mails e baixa automática
@@ -119,7 +119,9 @@ Recomendado: deixar Late Fee global do WHMCS em **0** se todas as faturas usarem
 3. Banco Inter dispara webhook ao compensar. O callback **não credita só com o
    payload**: confirma `RECEBIDO` / `MARCADO_RECEBIDO` via `GET /cobrancas`, usa
    transId canônico (`endToEndId` → `txid` → `codigoSolicitacao`) e ignora
-   cobrança local já paga. Falha nessa confirmação responde **503** para o Inter
+   cobrança local já paga. A consulta v3 devolve status e valor recebido dentro
+   de `cobranca`; `getCollection()` promove esses campos para a raiz e mantém
+   `boleto`/`pix`. Falha nessa confirmação responde **503** para o Inter
    retentar.
 4. Hook `DailyCronJob` (1) reconcilia cobranças já pagas no banco mas ainda
    Unpaid no WHMCS (webhook perdido), (2) cancela cobranças além de `dias_baixa`
@@ -173,5 +175,9 @@ o nome `seixastec_bancointer` com credenciais mascaradas.
   `settle.duplicate_transaction` no Gateway Log.
 - **Webhook 503** — a API do Inter falhou na confirmação; o Inter deve
   retentar. O cron diário também reconcilia pagamentos perdidos.
+- **Inter mostra RECEBIDO, mas a fatura continua Unpaid** — até a 1.5.3 o
+  gateway lia `situacao` na raiz da resposta v3 e ignorava o objeto
+  `cobranca`. Atualize para 1.5.4 e deixe o cron reconciliar, ou liquide a
+  cobrança confirmada com a rotina de settlement.
 - **Forms do painel abrem a página inteira no iframe** — o embed usa
   `minimal=1`; a 1.5.3 passa esse flag para os forms de webhook.

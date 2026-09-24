@@ -108,7 +108,17 @@ class BancoInterAPI
 
     public function getCollection(string $codigoSolicitacao): array
     {
-        return $this->request("GET", "/cobranca/v3/cobrancas/" . rawurlencode($codigoSolicitacao));
+        $response = $this->request("GET", "/cobranca/v3/cobrancas/" . rawurlencode($codigoSolicitacao));
+        $cobranca = $response["cobranca"] ?? null;
+
+        // Inter cobrança v3 GET wraps settlement fields under "cobranca",
+        // while webhook settlement and daily reconciliation read root fields.
+        // Promote those fields and retain nested boleto/pix siblings for callers.
+        if (is_array($cobranca)) {
+            $response = array_replace($response, $cobranca);
+        }
+
+        return $response;
     }
 
     public function cancelCollection(string $codigoSolicitacao, string $motivo = "APEDIDODOCLIENTE"): array

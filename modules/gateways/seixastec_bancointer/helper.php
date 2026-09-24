@@ -458,7 +458,10 @@ class BancoInterHelper
         $desconto  = $get(["valorDesconto", "desconto", "cobranca.desconto", "pix.desconto"]) ?? null;
         $tarifa    = $get(["valorTarifa", "tarifa", "pix.valorTarifa"]) ?? null;
         $total     = $get([
-            "valorTotalRecebimento", "valorPago", "valorRecebido",
+            "valorTotalRecebido", "valorTotalRecebimento",
+            "cobranca.valorTotalRecebido", "cobranca.valorTotalRecebimento",
+            "valorPago", "cobranca.valorPago",
+            "valorRecebido", "cobranca.valorRecebido",
             "valor", "amount", "pix.valor", "pix.valorPago", "pix.amount"
         ]) ?? null;
 
@@ -661,9 +664,14 @@ class BancoInterHelper
     public static function amountFrom(array $payload): ?float
     {
         $value = self::firstValue($payload, [
+            "valorTotalRecebido",
             "valorTotalRecebimento",
+            "cobranca.valorTotalRecebido",
+            "cobranca.valorTotalRecebimento",
             "valorPago",
+            "cobranca.valorPago",
             "valorRecebido",
+            "cobranca.valorRecebido",
             "valor",
             "amount",
             "pix.valor",

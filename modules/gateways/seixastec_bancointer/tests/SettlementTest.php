@@ -45,6 +45,25 @@ final class SettlementTest extends TestCase
         self::assertNull(BancoInterHelper::amountFrom(["foo" => "bar"]));
     }
 
+    public function testAmountFromReadsCobrancaV3WrappedReceipt(): void
+    {
+        $payload = [
+            "cobranca" => [
+                "situacao" => "RECEBIDO",
+                "valorTotalRecebido" => "20.00",
+            ],
+            "boleto" => ["nossoNumero" => "N"],
+            "pix" => ["txid" => "T"],
+        ];
+
+        self::assertSame(20.0, BancoInterHelper::amountFrom($payload));
+        self::assertSame(20.0, BancoInterHelper::parsePaymentBreakdown($payload)["total"]);
+        self::assertSame(34.25, BancoInterHelper::amountFrom([
+            "situacao" => "RECEBIDO",
+            "valorTotalRecebido" => "34.25",
+        ]));
+    }
+
     public function testExtractWebhookEventsFlattensPixBatch(): void
     {
         $payload = [
