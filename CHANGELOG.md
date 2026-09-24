@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.4] - 2026-09-24
+
+### Fixed
+- **Pagamento recebido no Inter não baixava a fatura.** O `GET /cobranca/v3/cobrancas/{codigo}` devolve `situacao` e `valorTotalRecebido` dentro de `cobranca`, enquanto o webhook e o cron liam esses campos na raiz. O callback respondia HTTP 200 e ignorava o evento; a reconciliação diária repetia a leitura vazia.
+- `getCollection()` agora promove os campos de `cobranca` para a raiz e preserva os irmãos `boleto` e `pix`.
+- `amountFrom()` e `parsePaymentBreakdown()` também leem `valorTotalRecebido` na raiz e em `cobranca`, sem deixar de aceitar `valorTotalRecebimento`.
+
 ## [1.5.3] - 2026-09-11
 
 ### Fixed

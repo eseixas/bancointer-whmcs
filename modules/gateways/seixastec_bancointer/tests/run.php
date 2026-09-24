@@ -42,6 +42,9 @@ bi_assert_true(strlen($first) <= 35, "refund id max 35 chars");
 
 bi_assert_same(105.5, BancoInterHelper::amountFrom(["valorPago" => "105,50"]), "amount br decimal");
 bi_assert_same(105.5, BancoInterHelper::amountFrom(["valorTotalRecebimento" => "105.50"]), "amount dot decimal");
+$wrapped = ["cobranca" => ["situacao" => "RECEBIDO", "valorTotalRecebido" => "20.00"], "pix" => ["txid" => "T"]];
+bi_assert_same(20.0, BancoInterHelper::amountFrom($wrapped), "amount from cobranca.valorTotalRecebido");
+bi_assert_same(20.0, BancoInterHelper::parsePaymentBreakdown($wrapped)["total"], "breakdown total from wrapped receipt");
 
 $events = BancoInterHelper::extractWebhookEvents([
     "pix" => [
