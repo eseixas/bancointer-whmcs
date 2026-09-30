@@ -1,6 +1,10 @@
 .agent/
 .agents/
 .claude/
+.antigravitycli/
+.commandcode/
+mcps/
+docs/
 AGENTS.md
 .vscode/
 .idea/
