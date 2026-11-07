@@ -1,6 +1,6 @@
 # Banco Inter Boleto e PIX — WHMCS 9.0.1 Payment Gateway
 
-**Versão atual: 1.5.4**
+**Versão atual: 1.5.5**
 
 Módulo WHMCS para emissão de cobranças PIX + Boleto via API v3 do Banco Inter,
 com registro de webhook automático, anexo de PDF nos e-mails e baixa automática
