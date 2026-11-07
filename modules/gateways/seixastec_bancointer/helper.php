@@ -1127,6 +1127,111 @@ class BancoInterHelper
         return true;
     }
 
+    /**
+     * Sum of invoice item amounts plus invoice taxes (pure, testable).
+     *
+     * @param array<int,float|int|string> $itemAmounts
+     */
+    public static function invoiceTotalFromParts(array $itemAmounts, float $tax = 0.0, float $tax2 = 0.0): float
+    {
+        $sum = 0.0;
+        foreach ($itemAmounts as $amount) {
+            $sum += (float) $amount;
+        }
+
+        return round($sum + $tax + $tax2, 2);
+    }
+
+    /**
+     * Part of a payment that exceeds what the invoice still owed and is not
+     * already explained by multa/juros reported by the bank (pure, testable).
+     */
+    public static function residualOverpayment(float $received, float $balanceDue, float $multa, float $juros): float
+    {
+        return round(max(0.0, $received - $balanceDue - max(0.0, $multa) - max(0.0, $juros)), 2);
+    }
+
+    /** True when the payment date is after the invoice due date (date-only comparison). */
+    public static function isLatePayment(?string $paidAt, ?string $dueDate): bool
+    {
+        if ($paidAt === null || $dueDate === null || $dueDate === "" || $dueDate === "0000-00-00") {
+            return false;
+        }
+
+        $paid = strtotime(substr($paidAt, 0, 10));
+        $due = strtotime(substr($dueDate, 0, 10));
+
+        return $paid !== false && $due !== false && $paid > $due;
+    }
+
+    /** Amount the invoice still owes (total minus recorded payments/credits). */
+    public static function invoiceBalanceDue(int $invoiceId): ?float
+    {
+        $invoice = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+        if (!$invoice) {
+            return null;
+        }
+
+        $accounts = Capsule::table("tblaccounts")->where("invoiceid", $invoiceId)->get();
+        $paid = 0.0;
+        foreach ($accounts as $row) {
+            $paid += (float) $row->amountin - (float) $row->amountout;
+        }
+
+        return round((float) $invoice->total - $paid, 2);
+    }
+
+    /**
+     * Make tblinvoices.subtotal/total match the items. updateInvoiceTotal() is
+     * tried first; if the stored total still differs (observed on invoice #112,
+     * where a juros item was added but total stayed at the nominal amount) it is
+     * corrected directly. Returns true when the invoice is consistent afterwards.
+     */
+    public static function reconcileInvoiceTotalWithItems(int $invoiceId): bool
+    {
+        $read = function () use ($invoiceId): array {
+            $invoice = Capsule::table("tblinvoices")->where("id", $invoiceId)->first();
+            $items = Capsule::table("tblinvoiceitems")->where("invoiceid", $invoiceId)->pluck("amount")->all();
+            if (!$invoice) {
+                return [null, null, null];
+            }
+            $tax = (float) ($invoice->tax ?? 0);
+            $tax2 = (float) ($invoice->tax2 ?? 0);
+            $expected = self::invoiceTotalFromParts($items, $tax, $tax2);
+
+            return [$invoice, $expected, round((float) $invoice->total, 2)];
+        };
+
+        [$invoice, $expected, $stored] = $read();
+        if (!$invoice) {
+            return false;
+        }
+        if (abs($expected - $stored) < 0.005) {
+            return true;
+        }
+
+        self::recalculateInvoiceTotal($invoiceId);
+        [$invoice, $expected, $stored] = $read();
+        if (abs($expected - $stored) < 0.005) {
+            return true;
+        }
+
+        $subtotal = round($expected - (float) ($invoice->tax ?? 0) - (float) ($invoice->tax2 ?? 0), 2);
+        Capsule::table("tblinvoices")->where("id", $invoiceId)->update([
+            "subtotal" => $subtotal,
+            "total" => $expected,
+        ]);
+        self::log("charges.total_forced", [
+            "invoice_id" => $invoiceId,
+            "stored_total" => $stored,
+            "items_total" => $expected,
+        ], "Total da fatura divergia dos itens apos juros/multa; corrigido");
+
+        [, $expected, $stored] = $read();
+
+        return abs($expected - $stored) < 0.005;
+    }
+
     public static function recalculateInvoiceTotal(int $invoiceId): void
     {
         if (!function_exists("updateInvoiceTotal")) {

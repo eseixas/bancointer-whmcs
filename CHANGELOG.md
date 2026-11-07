@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.5] - 2026-11-07
+
+### Fixed
+- **Juros de mora ficavam fora do total da fatura.** Na fatura #112 a linha "Juros de mora (Banco Inter)" era criada, mas `tblinvoices.total` continuava no valor nominal; a NFS-e (que le o total) saia sem os juros e o excedente aparecia como saldo negativo. Agora `reconcileInvoiceTotalWithItems()` confere o total contra os itens ANTES de `addInvoicePayment` e corrige direto se `updateInvoiceTotal()` nao bastar. Se ainda nao fechar, a baixa responde `SETTLE_RETRY` (o Inter reenvia) e fica registrada no activity log.
+- **Pagamento a mais virava credito do cliente.** O excedente sobre o saldo da fatura (`invoiceBalanceDue`, que considera creditos ja aplicados) passa a ser registrado como juros de mora quando o pagamento foi feito apos o vencimento. Sem atraso, nada e reclassificado: fica um aviso no activity log para revisao.
+
+### Tests
+- `tests/run.php`: total pelos itens, excedente residual (caso #112 e caso #118 com credito aplicado) e deteccao de atraso.
+
 ## [1.5.4] - 2026-09-24
 
 ### Fixed

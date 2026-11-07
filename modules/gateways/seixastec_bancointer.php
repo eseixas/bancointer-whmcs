@@ -689,16 +689,38 @@ function seixastec_bancointer_settleFromRemote(
         $paidMulta = ($breakdown["multa"] ?? null) !== null ? round((float) $breakdown["multa"], 2) : 0.0;
         $paidJuros = ($breakdown["juros"] ?? null) !== null ? round((float) $breakdown["juros"], 2) : 0.0;
 
-        if ($paidMulta < 0.01 && $paidJuros < 0.01 && $fresh->amount !== null) {
+        // Pagamento a mais que o saldo da fatura = juros/multa de mora (o Inter cobra
+        // o acrescimo no boleto). Registra como juros na fatura em vez de virar credito.
+        $balanceDue = BancoInterHelper::invoiceBalanceDue($invoiceId);
+        $dueDate = (string) (Capsule::table("tblinvoices")->where("id", $invoiceId)->value("duedate") ?? "");
+        $paidAtStr = BancoInterHelper::paidAt($event) ?: BancoInterHelper::paidAt($remote) ?: date("Y-m-d");
+        if ($balanceDue !== null) {
+            $residual = BancoInterHelper::residualOverpayment($amount, $balanceDue, $paidMulta, $paidJuros);
+            if ($residual >= 0.01) {
+                if (BancoInterHelper::isLatePayment($paidAtStr, $dueDate)) {
+                    $paidJuros = round($paidJuros + $residual, 2);
+                    BancoInterHelper::log("settle.charges_estimated", [
+                        "invoice_id" => $invoiceId,
+                        "balance_due" => $balanceDue,
+                        "received" => $amount,
+                    ], ["estimated_juros" => $residual]);
+                } else {
+                    BancoInterHelper::log("settle.overpayment_unexplained", [
+                        "invoice_id" => $invoiceId,
+                        "balance_due" => $balanceDue,
+                        "received" => $amount,
+                    ], ["excess" => $residual, "reason" => "pagamento nao esta em atraso"]);
+                    if (function_exists("logActivity")) {
+                        logActivity("Banco Inter: fatura #{$invoiceId} recebeu R$ " . number_format($residual, 2, ",", ".")
+                            . " a mais sem atraso; revisar possivel credito");
+                    }
+                }
+            }
+        } elseif ($paidMulta < 0.01 && $paidJuros < 0.01 && $fresh->amount !== null) {
             $nominal = round((float) $fresh->amount, 2);
             $extra = round(max(0, $amount - $nominal), 2);
             if ($extra >= 0.01) {
                 $paidJuros = $extra;
-                BancoInterHelper::log("settle.charges_estimated", [
-                    "invoice_id" => $invoiceId,
-                    "nominal" => $nominal,
-                    "received" => $amount,
-                ], ["estimated_juros" => $extra]);
             }
         }
 
@@ -708,6 +730,16 @@ function seixastec_bancointer_settleFromRemote(
 
         BancoInterHelper::removeWhmcsLateFeeEntries($invoiceId);
         BancoInterHelper::applyReceivedChargesToInvoice($invoiceId, $paidMulta, $paidJuros, (int) $fresh->id);
+
+        // O total precisa incluir juros/multa ANTES de registrar o pagamento; senao o
+        // excedente vira credito do cliente e a NFS-e (que le o total) sai sem os juros.
+        if (!BancoInterHelper::reconcileInvoiceTotalWithItems($invoiceId)) {
+            BancoInterHelper::log("settle.total_mismatch", ["invoice_id" => $invoiceId], "total da fatura nao fecha com os itens; pagamento nao registrado");
+            if (function_exists("logActivity")) {
+                logActivity("Banco Inter: total da fatura #{$invoiceId} nao fecha com os itens apos juros/multa; baixa interrompida");
+            }
+            return BancoInterHelper::SETTLE_RETRY;
+        }
 
         addInvoicePayment($invoiceId, $transId, $amount, $fee, $gatewayModule);
         if (function_exists("logTransaction")) {
